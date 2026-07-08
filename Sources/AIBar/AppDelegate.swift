@@ -55,10 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private func setupPopover() {
         popover.behavior = .transient
         popover.delegate = self
-        popover.contentSize = NSSize(width: 400, height: 236)
+        popover.contentSize = store.popoverSize
         popover.contentViewController = NSHostingController(
             rootView: UsagePopover(store: store)
-                .frame(width: 400, height: 236)
+                .frame(width: store.popoverSize.width)
         )
     }
 
@@ -77,6 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         statusView.lines = store.menuBarLines
         statusView.toolTip = store.menuBarTitle
         statusItem.length = statusView.preferredWidth
+        updatePopoverSize()
+    }
+
+    private func updatePopoverSize() {
+        popover.contentSize = store.popoverSize
     }
 
     @objc private func togglePopover(_ sender: Any?) {
@@ -88,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
         guard let statusView else { return }
         statusView.isHighlighted = true
+        updatePopoverSize()
         popover.show(relativeTo: statusView.bounds, of: statusView, preferredEdge: .minY)
 
         Task {

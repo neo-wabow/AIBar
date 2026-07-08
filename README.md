@@ -11,9 +11,11 @@ A macOS menu bar app for checking local Codex and Claude usage.
 彈出視窗提供顯示控制：
 
 - 同時顯示 Codex 與 Claude、只顯示 Codex，或只顯示 Claude
-- 依照 Codex 在上或 Claude 在上排序
+- 同時顯示兩者時，可拖曳卡片調整 Codex / Claude 上下順序
 
 這個設定會同時套用到選單列指示器與彈出視窗卡片。
+
+彈出視窗底部的電源按鈕可離開 AIBar。
 
 ## 建置
 

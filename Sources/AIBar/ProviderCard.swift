@@ -3,6 +3,7 @@ import SwiftUI
 struct ProviderCard: View {
     let usage: ProviderUsage
     let accent: Color
+    let showsDragHandle: Bool
 
     private var primaryRemaining: Double? {
         usage.primaryLimit?.remainingPercent
@@ -17,7 +18,7 @@ struct ProviderCard: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        HStack(alignment: .center, spacing: 8) {
             HStack(spacing: 10) {
                 Image(systemName: usage.kind.symbol)
                     .font(.system(size: 16, weight: .semibold))
@@ -41,7 +42,7 @@ struct ProviderCard: View {
                 resetAt: usage.primaryLimit?.resetsAt,
                 accent: accent
             )
-            .frame(width: 104)
+            .frame(width: stripWidth)
 
             RemainingStrip(
                 title: secondaryTitle,
@@ -49,7 +50,15 @@ struct ProviderCard: View {
                 resetAt: usage.secondaryLimit?.resetsAt,
                 accent: accent
             )
-            .frame(width: 104)
+            .frame(width: stripWidth)
+
+            if showsDragHandle {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppColors.tertiary)
+                    .frame(width: 12, height: 34)
+                    .help("拖曳調整順序")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -60,6 +69,10 @@ struct ProviderCard: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(limitColor(primaryRemaining).opacity((primaryRemaining ?? 100) <= 45 ? 0.35 : 0.12), lineWidth: 1)
         )
+    }
+
+    private var stripWidth: CGFloat {
+        showsDragHandle ? 96 : 104
     }
 
     private var cardBackground: Color {
