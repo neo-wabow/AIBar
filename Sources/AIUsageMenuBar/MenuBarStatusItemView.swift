@@ -3,8 +3,8 @@ import AppKit
 final class MenuBarStatusItemView: NSControl {
     var lines: [MenuBarStatusLine] = [] {
         didSet {
-            rebuildRows()
             invalidateIntrinsicContentSize()
+            needsDisplay = true
         }
     }
 
@@ -17,32 +17,41 @@ final class MenuBarStatusItemView: NSControl {
 
     var preferredWidth: CGFloat {
         let visibleLines = visibleLines
-        return ceil(Self.horizontalPadding * 2 + nameColumnWidth(for: visibleLines) + Self.columnSpacing + valueColumnWidth(for: visibleLines))
+        return ceil(
+            Self.horizontalPadding * 2
+                + Self.iconSize
+                + Self.iconCodeSpacing
+                + codeColumnWidth(for: visibleLines)
+                + Self.columnSpacing
+                + valueColumnWidth(for: visibleLines)
+        )
     }
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: preferredWidth, height: NSStatusBar.system.thickness)
     }
 
-    private static let lineFont = NSFont.systemFont(ofSize: 10.5, weight: .regular)
-    private static let horizontalPadding: CGFloat = 5
-    private static let columnSpacing: CGFloat = 6
+    override var isFlipped: Bool { true }
 
-    private let rowsStack = NSStackView()
+    private static let lineFont = NSFont.systemFont(ofSize: 10.0, weight: .regular)
+    private static let horizontalPadding: CGFloat = 5
+    private static let iconSize: CGFloat = 8
+    private static let iconCodeSpacing: CGFloat = 3
+    private static let columnSpacing: CGFloat = 6
+    private static let rowGap: CGFloat = 1
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupView()
-        rebuildRows()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         setupView()
-        rebuildRows()
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        let textColor: NSColor
         if isHighlighted {
             NSColor.selectedContentBackgroundColor.setFill()
             NSBezierPath(
@@ -50,9 +59,12 @@ final class MenuBarStatusItemView: NSControl {
                 xRadius: 4,
                 yRadius: 4
             ).fill()
+            textColor = .selectedMenuItemTextColor
+        } else {
+            textColor = .labelColor
         }
 
-        super.draw(dirtyRect)
+        drawLines(color: textColor)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -65,87 +77,75 @@ final class MenuBarStatusItemView: NSControl {
 
     private func setupView() {
         wantsLayer = true
-
-        rowsStack.translatesAutoresizingMaskIntoConstraints = false
-        rowsStack.orientation = .vertical
-        rowsStack.alignment = .leading
-        rowsStack.spacing = -5
-        rowsStack.distribution = .gravityAreas
-
-        addSubview(rowsStack)
-
-        NSLayoutConstraint.activate([
-            rowsStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.horizontalPadding),
-            rowsStack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            rowsStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.horizontalPadding)
-        ])
-
-        updateColors()
-    }
-
-    private func rebuildRows() {
-        rowsStack.arrangedSubviews.forEach { view in
-            rowsStack.removeArrangedSubview(view)
-            view.removeFromSuperview()
-        }
-
-        let visibleLines = visibleLines
-        let nameWidth = nameColumnWidth(for: visibleLines)
-        let valueWidth = valueColumnWidth(for: visibleLines)
-
-        for line in visibleLines {
-            rowsStack.addArrangedSubview(makeRow(for: line, nameWidth: nameWidth, valueWidth: valueWidth))
-        }
-
-        updateColors()
-    }
-
-    private func makeRow(for line: MenuBarStatusLine, nameWidth: CGFloat, valueWidth: CGFloat) -> NSStackView {
-        let nameLabel = makeLabel(line.name, alignment: .left)
-        let valueLabel = makeLabel(line.value, alignment: .right)
-
-        let row = NSStackView(views: [nameLabel, valueLabel])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.spacing = Self.columnSpacing
-
-        NSLayoutConstraint.activate([
-            nameLabel.widthAnchor.constraint(equalToConstant: nameWidth),
-            valueLabel.widthAnchor.constraint(equalToConstant: valueWidth)
-        ])
-
-        return row
     }
 
     private func updateColors() {
-        let color: NSColor = isHighlighted ? .selectedMenuItemTextColor : .labelColor
-        rowsStack.arrangedSubviews.forEach { row in
-            row.subviews.forEach { view in
-                if let label = view as? NSTextField {
-                    label.textColor = color
-                }
-            }
-        }
+        needsDisplay = true
     }
 
     private var visibleLines: [MenuBarStatusLine] {
         lines.isEmpty
-            ? [MenuBarStatusLine(symbolName: "chart.bar.fill", name: "AI", value: "--")]
+            ? [MenuBarStatusLine(symbolName: "chart.bar.fill", name: "AI", code: "AI", value: "--")]
             : lines
     }
 
-    private func makeLabel(_ text: String, alignment: NSTextAlignment) -> NSTextField {
-        let label = NSTextField(labelWithString: text)
-        label.font = Self.lineFont
-        label.alignment = alignment
-        label.lineBreakMode = .byClipping
-        label.maximumNumberOfLines = 1
-        label.allowsDefaultTighteningForTruncation = true
-        return label
+    private func drawLines(color: NSColor) {
+        let visibleLines = visibleLines.prefix(2)
+        let allLines = Array(visibleLines)
+        let codeWidth = codeColumnWidth(for: allLines)
+        let valueWidth = valueColumnWidth(for: allLines)
+        let contentWidth = Self.iconSize + Self.iconCodeSpacing + codeWidth + Self.columnSpacing + valueWidth
+        let lineHeight = ceil(Self.lineFont.ascender - Self.lineFont.descender)
+        let totalHeight = lineHeight * CGFloat(allLines.count) + Self.rowGap * CGFloat(max(allLines.count - 1, 0))
+        let startX = floor((bounds.width - contentWidth) / 2)
+        let startY = floor((bounds.height - totalHeight) / 2)
+
+        for (index, line) in allLines.enumerated() {
+            let y = startY + CGFloat(index) * (lineHeight + Self.rowGap)
+            let iconY = y + floor((lineHeight - Self.iconSize) / 2)
+            drawIcon(line.symbolName, in: NSRect(x: startX, y: iconY, width: Self.iconSize, height: Self.iconSize), color: color)
+            drawText(
+                line.code,
+                in: NSRect(x: startX + Self.iconSize + Self.iconCodeSpacing, y: y, width: codeWidth, height: lineHeight),
+                alignment: .left,
+                color: color
+            )
+            drawText(
+                line.value,
+                in: NSRect(
+                    x: startX + Self.iconSize + Self.iconCodeSpacing + codeWidth + Self.columnSpacing,
+                    y: y,
+                    width: valueWidth,
+                    height: lineHeight
+                ),
+                alignment: .right,
+                color: color
+            )
+        }
     }
 
-    private func nameColumnWidth(for lines: [MenuBarStatusLine]) -> CGFloat {
-        ceil(lines.map { textWidth($0.name) }.max() ?? textWidth("AI"))
+    private func drawText(_ text: String, in rect: NSRect, alignment: NSTextAlignment, color: NSColor) {
+        let style = NSMutableParagraphStyle()
+        style.alignment = alignment
+        style.lineBreakMode = .byClipping
+
+        (text as NSString).draw(
+            in: rect,
+            withAttributes: [
+                .font: Self.lineFont,
+                .foregroundColor: color,
+                .paragraphStyle: style
+            ]
+        )
+    }
+
+    private func drawIcon(_ symbolName: String, in rect: NSRect, color: NSColor) {
+        guard let image = symbolImage(named: symbolName) else { return }
+        image.drawTinted(in: rect, color: color)
+    }
+
+    private func codeColumnWidth(for lines: [MenuBarStatusLine]) -> CGFloat {
+        ceil(lines.map { textWidth($0.code) }.max() ?? textWidth("AI"))
     }
 
     private func valueColumnWidth(for lines: [MenuBarStatusLine]) -> CGFloat {
@@ -154,5 +154,24 @@ final class MenuBarStatusItemView: NSControl {
 
     private func textWidth(_ text: String) -> CGFloat {
         (text as NSString).size(withAttributes: [.font: Self.lineFont]).width
+    }
+
+    private func symbolImage(named name: String) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: Self.iconSize, weight: .regular)
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+        image?.isTemplate = true
+        return image
+    }
+}
+
+private extension NSImage {
+    func drawTinted(in rect: NSRect, color: NSColor) {
+        guard let copy = copy() as? NSImage else { return }
+        copy.lockFocus()
+        color.set()
+        NSRect(origin: .zero, size: copy.size).fill(using: .sourceAtop)
+        copy.unlockFocus()
+        copy.draw(in: rect)
     }
 }

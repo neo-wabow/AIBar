@@ -13,6 +13,13 @@ enum ProviderKind: String, CaseIterable, Identifiable {
         }
     }
 
+    var menuBarCode: String {
+        switch self {
+        case .codex: return "CX"
+        case .claude: return "CL"
+        }
+    }
+
     var subtitle: String {
         switch self {
         case .codex: return "官方 rate limit 剩餘"

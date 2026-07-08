@@ -4,6 +4,7 @@ import SwiftUI
 struct MenuBarStatusLine: Equatable {
     var symbolName: String
     var name: String
+    var code: String
     var value: String
 
     var title: String {
@@ -37,9 +38,9 @@ final class UsageStore: ObservableObject {
     var menuBarLines: [MenuBarStatusLine] {
         ProviderKind.allCases.map { kind in
             guard let remaining = primaryRemainingValue(for: kind) else {
-                return MenuBarStatusLine(symbolName: kind.symbol, name: kind.title, value: "--")
+                return MenuBarStatusLine(symbolName: kind.symbol, name: kind.title, code: kind.menuBarCode, value: "--")
             }
-            return MenuBarStatusLine(symbolName: kind.symbol, name: kind.title, value: "\(Int(remaining.rounded()))%")
+            return MenuBarStatusLine(symbolName: kind.symbol, name: kind.title, code: kind.menuBarCode, value: "\(Int(remaining.rounded()))%")
         }
     }
 
