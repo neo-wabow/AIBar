@@ -1,6 +1,8 @@
-# AI 用量
+# AIBar
 
 Mac menu bar app for checking local Codex and Claude usage.
+
+![AIBar screenshot](assets/screenshot.png)
 
 ## Build
 
