@@ -220,10 +220,12 @@ struct UsageCollector {
 
         var latestByOrg: [String: [String: Any]] = [:]
         var countsByOrg: [String: Int] = [:]
+        var samplesByOrg: [String: [[String: Any]]] = [:]
 
         for sample in samples {
             let org = stringValue(sample["org"]) ?? "default"
             countsByOrg[org, default: 0] += 1
+            samplesByOrg[org, default: []].append(sample)
 
             let timestamp = doubleValue(sample["t"]) ?? 0
             let currentTimestamp = doubleValue(latestByOrg[org]?["t"]) ?? 0
@@ -236,6 +238,8 @@ struct UsageCollector {
         for (org, sample) in latestByOrg {
             guard let values = sample["u"] as? [String: Any] else { continue }
             let desktopResetTimes = claudeDesktopResetTimes()
+            let fiveHourReset = desktopResetTimes.fiveHour
+                ?? claudeDesktopFiveHourReset(fromHistory: samplesByOrg[org] ?? [])
 
             var usage = ProviderUsage(kind: .claude)
             usage.accountName = org == "default" ? "Desktop" : "Desktop \(org.prefix(6))"
@@ -247,7 +251,7 @@ struct UsageCollector {
             usage.primaryLimit = RateWindow(
                 usedPercent: doubleValue(values["fh"]),
                 windowMinutes: 5 * 60,
-                resetsAt: desktopResetTimes.fiveHour
+                resetsAt: fiveHourReset
             )
             usage.secondaryLimit = RateWindow(
                 usedPercent: doubleValue(values["sd"]),
@@ -295,6 +299,44 @@ struct UsageCollector {
             fiveHour: claudeDesktopFiveHourReset(under: claudeRoot),
             sevenDay: claudeDesktopSevenDayReset(under: claudeRoot)
         )
+    }
+
+    private func claudeDesktopFiveHourReset(fromHistory samples: [[String: Any]]) -> Date? {
+        let points: [(date: Date, usedPercent: Double)] = samples.compactMap { sample in
+            guard
+                let date = dateFromEpochMilliseconds(sample["t"]),
+                let values = sample["u"] as? [String: Any],
+                let usedPercent = doubleValue(values["fh"])
+            else {
+                return nil
+            }
+            return (date: date, usedPercent: usedPercent)
+        }
+        .sorted { $0.date < $1.date }
+
+        guard !points.isEmpty else { return nil }
+
+        var latestResetStart: Date?
+        var previousPoint: (date: Date, usedPercent: Double)?
+        for point in points {
+            if let previousPoint {
+                let largeDrop = previousPoint.usedPercent - point.usedPercent >= 50
+                let resetToLowUsage = previousPoint.usedPercent >= 50 && point.usedPercent <= 5
+                if largeDrop || resetToLowUsage {
+                    latestResetStart = point.date
+                }
+            }
+            previousPoint = point
+        }
+
+        if let latestResetStart {
+            let resetAt = latestResetStart.addingTimeInterval(5 * 60 * 60)
+            if resetAt > now {
+                return resetAt
+            }
+        }
+
+        return nil
     }
 
     private func claudeDesktopFiveHourReset(under claudeRoot: URL) -> Date? {

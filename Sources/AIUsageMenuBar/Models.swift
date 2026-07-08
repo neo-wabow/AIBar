@@ -102,17 +102,42 @@ struct ProviderUsage: Identifiable, Equatable {
     }
 
     var displayTitle: String {
-        guard kind == .claude, let accountName, !accountName.isEmpty, accountName != "default" else {
+        guard kind == .claude, let accountName = displayAccountName else {
             return kind.title
         }
         return "\(kind.title) \(accountName)"
+    }
+
+    private var displayAccountName: String? {
+        guard
+            let rawAccountName = accountName?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !rawAccountName.isEmpty,
+            rawAccountName != "default"
+        else {
+            return nil
+        }
+
+        guard planType == "Claude Desktop" else {
+            return rawAccountName
+        }
+
+        if rawAccountName == "Desktop" {
+            return nil
+        }
+
+        if rawAccountName.hasPrefix("Desktop ") {
+            let strippedName = rawAccountName.dropFirst("Desktop ".count)
+            return strippedName.isEmpty ? nil : String(strippedName)
+        }
+
+        return rawAccountName
     }
 
     var displaySubtitle: String {
         if kind == .claude {
             if primaryLimit != nil || secondaryLimit != nil {
                 if planType == "Claude Desktop" {
-                    return "Claude Desktop 剩餘"
+                    return "Claude 剩餘"
                 }
                 return "官方 statusline 剩餘"
             }
