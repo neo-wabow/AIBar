@@ -1,0 +1,7 @@
+.DS_Store
+
+# Swift Package Manager build artifacts
+.build/
+
+# Packaged app output
+dist/
