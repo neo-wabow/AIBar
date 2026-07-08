@@ -5,13 +5,13 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>zh_TW</string>
     <key>CFBundleExecutable</key>
-    <string>AIUsageMenuBar</string>
+    <string>AIBar</string>
     <key>CFBundleIdentifier</key>
-    <string>com.neo.ai-usage-menubar</string>
+    <string>com.neo.aibar</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>AI 用量</string>
+    <string>AIBar</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 @main
-struct AIUsageMenuBarApp: App {
+struct AIBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {

@@ -13,7 +13,7 @@ scripts/build_app.sh
 The app bundle is generated at:
 
 ```text
-dist/AI 用量.app
+dist/AIBar.app
 ```
 
 ## Data Sources

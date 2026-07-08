@@ -3,7 +3,7 @@ import Foundation
 enum SnapshotText {
     static func render(_ snapshot: UsageSnapshot) -> String {
         var lines: [String] = []
-        lines.append("AI 用量 snapshot \(DateFormatters.reset.string(from: snapshot.capturedAt))")
+        lines.append("AIBar snapshot \(DateFormatters.reset.string(from: snapshot.capturedAt))")
         lines.append(contentsOf: snapshot.providers.map(renderProvider))
         if !snapshot.errors.isEmpty {
             lines.append("Errors:")

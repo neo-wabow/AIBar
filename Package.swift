@@ -2,17 +2,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "AIUsageMenuBar",
+    name: "AIBar",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "AIUsageMenuBar", targets: ["AIUsageMenuBar"])
+        .executable(name: "AIBar", targets: ["AIBar"])
     ],
     targets: [
         .executableTarget(
-            name: "AIUsageMenuBar",
-            path: "Sources/AIUsageMenuBar"
+            name: "AIBar",
+            path: "Sources/AIBar"
         )
     ]
 )
