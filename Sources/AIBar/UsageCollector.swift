@@ -200,10 +200,8 @@ struct UsageCollector {
             }
 
             if let rateLimits = object["rate_limits"] as? [String: Any] {
-                if let capturedAt = usage.statuslineCapturedAt, now.timeIntervalSince(capturedAt) <= 5 * 60 {
-                    usage.primaryLimit = claudeRateWindow(from: rateLimits["five_hour"] as? [String: Any], windowMinutes: 5 * 60)
-                    usage.secondaryLimit = claudeRateWindow(from: rateLimits["seven_day"] as? [String: Any], windowMinutes: 7 * 24 * 60)
-                }
+                usage.primaryLimit = claudeRateWindow(from: rateLimits["five_hour"] as? [String: Any], windowMinutes: 5 * 60)
+                usage.secondaryLimit = claudeRateWindow(from: rateLimits["seven_day"] as? [String: Any], windowMinutes: 7 * 24 * 60)
             }
 
             if let context = object["context_window"] as? [String: Any] {
@@ -343,10 +341,6 @@ struct UsageCollector {
     }
 
     private func claudeStatuslineNote(for usage: ProviderUsage) -> String? {
-        if let capturedAt = usage.statuslineCapturedAt, now.timeIntervalSince(capturedAt) > 5 * 60 {
-            return "官方資料來自 \(DateFormatters.reset.string(from: capturedAt))，已視為過期；該帳號下一次回覆後會刷新"
-        }
-
         let windows = [usage.primaryLimit, usage.secondaryLimit].compactMap { $0 }
         if windows.isEmpty {
             return "尚未收到 Claude Code 官方 rate_limits；送出一次訊息後更新"
@@ -354,6 +348,10 @@ struct UsageCollector {
 
         if windows.allSatisfy({ $0.usedPercent == nil }) {
             return "Claude rate limit 資料已過期；打開該帳號的 Claude Code 後會更新"
+        }
+
+        if let capturedAt = usage.statuslineCapturedAt, now.timeIntervalSince(capturedAt) > 5 * 60 {
+            return "官方資料最後同步於 \(DateFormatters.reset.string(from: capturedAt))；該帳號下一次 Claude Code 回覆後會刷新"
         }
 
         return nil
