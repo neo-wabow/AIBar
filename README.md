@@ -21,10 +21,10 @@ A macOS menu bar app for checking local Codex and Claude usage.
 
 - macOS 13 或更新版本
 - Swift 5.9 相容工具鏈，或已安裝 Xcode Command Line Tools
-- Codex 用量需要本機 `~/.codex/sessions/**/*.jsonl`
-- Claude 官方剩餘額度需要 Claude Code、`python3`，並安裝 Claude Code statusline hook
+- Codex CLI（`codex`），或會寫入本機 `~/.codex/sessions/**/*.jsonl` 的 Codex app
+- Claude Code CLI（`claude`）、`python3`，並安裝 Claude Code statusline hook
 
-未安裝 Claude statusline hook 時，AIBar 仍可讀取本機 Claude token usage，但官方 quota / 剩餘百分比會顯示未同步。
+AIBar 讀的是本機 CLI 產生的紀錄，不會登入雲端帳號查 API。未安裝 Claude statusline hook 時，AIBar 仍可讀取本機 Claude token usage，但官方 quota / 剩餘百分比會顯示未同步；只安裝 Claude Desktop 不足以提供 Claude Code 官方 quota。
 
 ## 建置
 
@@ -40,8 +40,8 @@ dist/AIBar.app
 
 ## 資料來源
 
-- Codex：讀取 `~/.codex/sessions/**/*.jsonl` 裡的 `token_count` 事件與 rate-limit metadata。AIBar 會以 `100 - used_percent` 顯示剩餘額度。
-- Claude 官方剩餘額度：讀取 `~/.ai-usage/claude-status/*.json`，這些檔案由 Claude Code `statusLine` hook 寫入。AIBar 會讀取官方的 `rate_limits.five_hour.used_percentage` 與 `rate_limits.seven_day.used_percentage`，並以 `100 - used_percentage` 顯示剩餘額度。
+- Codex CLI / app：讀取 `~/.codex/sessions/**/*.jsonl` 裡的 `token_count` 事件與 rate-limit metadata。AIBar 會以 `100 - used_percent` 顯示剩餘額度。
+- Claude Code CLI 官方剩餘額度：讀取 `~/.ai-usage/claude-status/*.json`，這些檔案由 Claude Code `statusLine` hook 寫入。AIBar 會讀取官方的 `rate_limits.five_hour.used_percentage` 與 `rate_limits.seven_day.used_percentage`，並以 `100 - used_percentage` 顯示剩餘額度。
 - Claude 本機備援：讀取 `~/.claude/projects/**/*.jsonl` 裡 assistant message 的 `usage` 欄位，並去除重複 message record。
 
 Codex 會在本機 session logs 暴露目前 rate-limit 百分比。
