@@ -40,7 +40,8 @@ struct ProviderCard: View {
                 title: "5 小時",
                 remaining: primaryRemaining,
                 resetAt: usage.primaryLimit?.resetsAt,
-                accent: accent
+                accent: accent,
+                unavailableText: unavailableText
             )
             .frame(width: stripWidth)
 
@@ -48,7 +49,8 @@ struct ProviderCard: View {
                 title: secondaryTitle,
                 remaining: secondaryRemaining,
                 resetAt: usage.secondaryLimit?.resetsAt,
-                accent: accent
+                accent: accent,
+                unavailableText: unavailableText
             )
             .frame(width: stripWidth)
 
@@ -73,6 +75,10 @@ struct ProviderCard: View {
 
     private var stripWidth: CGFloat {
         showsDragHandle ? 96 : 104
+    }
+
+    private var unavailableText: String {
+        usage.kind == .claude && !usage.hasOfficialLimits ? "未同步" : "重置 --"
     }
 
     private var cardBackground: Color {
@@ -105,6 +111,7 @@ private struct RemainingStrip: View {
     let remaining: Double?
     let resetAt: Date?
     let accent: Color
+    let unavailableText: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -145,6 +152,7 @@ private struct RemainingStrip: View {
     }
 
     private var resetText: String {
+        guard remaining != nil else { return unavailableText }
         guard let resetAt else { return "重置 --" }
         return "重置 \(DateFormatters.reset.string(from: resetAt))"
     }

@@ -39,6 +39,12 @@ Codex 會在本機 session logs 暴露目前 rate-limit 百分比。
 
 Claude 本機 logs 只包含 token usage，不包含官方方案額度或重置百分比。若要準確顯示 Claude 剩餘額度，需要安裝 statusline hook。
 
+### Claude 額度信任邊界
+
+Claude Code 的官方額度只能來自 Claude Code `statusLine` 產生的 `~/.ai-usage/claude-status/*.json`。如果這個來源不存在、過期，或沒有 `rate_limits`，AIBar 必須顯示未同步，不能用其他本機資料補百分比。
+
+特別禁止把 `~/Library/Application Support/Claude/plan-usage-history.json`、Claude Desktop cache、IndexedDB / Session Storage 解析結果，或任何推算值顯示成 Claude Code 官方 quota。這類資料曾造成 Claude Desktop cache 被誤標成 Claude Code 百分比；之後的改動如果要接 Claude 官方 usage API，必須保留清楚的來源標示與失敗時的未同步狀態。
+
 ## Claude Statusline 設定
 
 替預設 Claude 帳號安裝 hook：

@@ -44,6 +44,9 @@ enum SnapshotText {
         if let latestModel = usage.latestModel {
             parts.append("model=\(latestModel)")
         }
+        if let note = usage.note {
+            parts.append("note=\(note)")
+        }
         return parts.joined(separator: " ")
     }
 }

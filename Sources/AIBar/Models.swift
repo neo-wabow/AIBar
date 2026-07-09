@@ -117,28 +117,12 @@ struct ProviderUsage: Identifiable, Equatable {
             return nil
         }
 
-        guard planType == "Claude Desktop" else {
-            return rawAccountName
-        }
-
-        if rawAccountName == "Desktop" {
-            return nil
-        }
-
-        if rawAccountName.hasPrefix("Desktop ") {
-            let strippedName = rawAccountName.dropFirst("Desktop ".count)
-            return strippedName.isEmpty ? nil : String(strippedName)
-        }
-
         return rawAccountName
     }
 
     var displaySubtitle: String {
         if kind == .claude {
             if primaryLimit != nil || secondaryLimit != nil {
-                if planType == "Claude Desktop" {
-                    return "Claude 剩餘"
-                }
                 return "官方 statusline 剩餘"
             }
             return "本機 token 用量"
