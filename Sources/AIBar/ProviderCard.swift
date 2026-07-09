@@ -13,6 +13,10 @@ struct ProviderCard: View {
         usage.secondaryLimit?.remainingPercent
     }
 
+    private var displayedRemaining: Double? {
+        primaryRemaining ?? secondaryRemaining
+    }
+
     private var secondaryTitle: String {
         "一週"
     }
@@ -31,6 +35,13 @@ struct ProviderCard: View {
                     .foregroundStyle(AppColors.ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.74)
+
+                if let note = usage.note {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(AppColors.tertiary)
+                        .help(note)
+                }
             }
             .frame(width: 112, alignment: .leading)
 
@@ -69,7 +80,7 @@ struct ProviderCard: View {
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(limitColor(primaryRemaining).opacity((primaryRemaining ?? 100) <= 45 ? 0.35 : 0.12), lineWidth: 1)
+                .stroke(limitColor(displayedRemaining).opacity((displayedRemaining ?? 100) <= 45 ? 0.35 : 0.12), lineWidth: 1)
         )
     }
 
@@ -82,7 +93,7 @@ struct ProviderCard: View {
     }
 
     private var cardBackground: Color {
-        guard let remaining = primaryRemaining else {
+        guard let remaining = displayedRemaining else {
             return AppColors.panel
         }
         if remaining <= 20 {

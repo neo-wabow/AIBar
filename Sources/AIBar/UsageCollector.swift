@@ -219,18 +219,19 @@ struct UsageCollector {
             usage.statuslineCapturedAt = parseDateValue(object["captured_at"])
                 ?? modificationDate(for: file)
             usage.latestEventAt = usage.statuslineCapturedAt
-            let staleReason = claudeAuthStaleReason(
+            let authStaleReason = claudeAuthStaleReason(
                 snapshot: object,
                 accountName: accountName,
                 capturedAt: usage.statuslineCapturedAt,
                 currentAuthState: currentAuthState
-            ) ?? claudeStatuslineFreshnessStaleReason(capturedAt: usage.statuslineCapturedAt)
+            )
 
             if let model = object["model"] as? [String: Any] {
                 usage.latestModel = stringValue(model["display_name"]) ?? stringValue(model["id"])
             }
 
-            if staleReason == nil, let rateLimits = object["rate_limits"] as? [String: Any] {
+            let rateLimits = object["rate_limits"] as? [String: Any]
+            if authStaleReason == nil, let rateLimits {
                 usage.primaryLimit = claudeRateWindow(from: rateLimits["five_hour"] as? [String: Any], windowMinutes: 5 * 60)
                 usage.secondaryLimit = claudeRateWindow(from: rateLimits["seven_day"] as? [String: Any], windowMinutes: 7 * 24 * 60)
             }
@@ -243,7 +244,9 @@ struct UsageCollector {
                 usage.sessionCostUSD = doubleValue(cost["total_cost_usd"])
             }
 
-            usage.note = staleReason ?? claudeStatuslineNote(for: usage)
+            usage.note = authStaleReason
+                ?? claudeStatuslineNote(for: usage, hadRateLimits: rateLimits != nil)
+                ?? claudeStatuslineFreshnessNote(capturedAt: usage.statuslineCapturedAt)
             applyClaudeRateLimitErrorOverride(from: localFallback, to: &usage)
             accounts.append(usage)
         }
@@ -538,9 +541,12 @@ struct UsageCollector {
         )
     }
 
-    private func claudeStatuslineNote(for usage: ProviderUsage) -> String? {
+    private func claudeStatuslineNote(for usage: ProviderUsage, hadRateLimits: Bool) -> String? {
         let windows = [usage.primaryLimit, usage.secondaryLimit].compactMap { $0 }
         if windows.isEmpty {
+            if hadRateLimits {
+                return "Claude 官方 rate limit reset window 已過期；下一次 Claude Code 回覆後更新"
+            }
             return "尚未收到 Claude Code 官方 rate_limits；送出一次訊息後更新"
         }
 
@@ -551,13 +557,13 @@ struct UsageCollector {
         return nil
     }
 
-    private func claudeStatuslineFreshnessStaleReason(capturedAt: Date?) -> String? {
+    private func claudeStatuslineFreshnessNote(capturedAt: Date?) -> String? {
         guard let capturedAt else {
-            return "尚未收到 Claude Code 官方 limits；請重啟 Claude Code 或送出一則訊息後再重新整理"
+            return nil
         }
 
         if now.timeIntervalSince(capturedAt) > 5 * 60 {
-            return "Claude 官方資料最後同步於 \(DateFormatters.reset.string(from: capturedAt))；需等下一次 Claude Code 回覆後更新 limits"
+            return "Claude 官方資料最後同步於 \(DateFormatters.reset.string(from: capturedAt))；閒置中，下一次 Claude Code 回覆後刷新"
         }
 
         return nil

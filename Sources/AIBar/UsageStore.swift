@@ -26,7 +26,7 @@ final class UsageStore: ObservableObject {
     private var preferenceCancellable: AnyCancellable?
 
     var menuBarSymbol: String {
-        if let lowest = primaryRemainingValues().min(), lowest <= 20 {
+        if let lowest = menuBarRemainingValues().min(), lowest <= 20 {
             return "exclamationmark.triangle.fill"
         }
         if snapshot.errors.isEmpty {
@@ -41,7 +41,7 @@ final class UsageStore: ObservableObject {
 
     var menuBarLines: [MenuBarStatusLine] {
         preferences.visibleKinds.map { kind in
-            guard let remaining = primaryRemainingValue(for: kind) else {
+            guard let remaining = menuBarRemainingValue(for: kind) else {
                 return MenuBarStatusLine(symbolName: kind.symbol, name: kind.title, code: kind.menuBarCode, value: "--")
             }
             return MenuBarStatusLine(symbolName: kind.symbol, name: kind.title, code: kind.menuBarCode, value: "\(Int(remaining.rounded()))%")
@@ -97,14 +97,18 @@ final class UsageStore: ObservableObject {
         isRefreshing = false
     }
 
-    private func primaryRemainingValues() -> [Double] {
-        visibleProviders.compactMap { $0.primaryLimit?.remainingPercent }
+    private func menuBarRemainingValues() -> [Double] {
+        visibleProviders.compactMap(menuBarRemainingValue)
     }
 
-    private func primaryRemainingValue(for kind: ProviderKind) -> Double? {
+    private func menuBarRemainingValue(for kind: ProviderKind) -> Double? {
         snapshot.providers
             .filter { $0.kind == kind }
-            .compactMap { $0.primaryLimit?.remainingPercent }
+            .compactMap(menuBarRemainingValue)
             .min()
+    }
+
+    private func menuBarRemainingValue(for usage: ProviderUsage) -> Double? {
+        usage.primaryLimit?.remainingPercent ?? usage.secondaryLimit?.remainingPercent
     }
 }
