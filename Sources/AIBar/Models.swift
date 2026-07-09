@@ -91,6 +91,7 @@ struct ProviderUsage: Identifiable, Equatable {
     var liveContext: TokenTotals?
     var sessionCostUSD: Double?
     var statuslineCapturedAt: Date?
+    var limitErrorAt: Date?
     var note: String?
 
     var weekTotal: TokenTotals {

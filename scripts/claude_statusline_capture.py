@@ -39,6 +39,25 @@ def pick(source, key):
     return value if value is not None else None
 
 
+def read_auth_snapshot():
+    config_path = Path.home() / ".claude.json"
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    oauth = data.get("oauthAccount")
+    if not isinstance(oauth, dict):
+        return None
+
+    snapshot = {
+        "email": pick(oauth, "emailAddress"),
+        "organization_uuid": pick(oauth, "organizationUuid"),
+        "organization_name": pick(oauth, "organizationName"),
+    }
+    return {key: value for key, value in snapshot.items() if value}
+
+
 def write_snapshot(data, account):
     output_dir = Path.home() / ".ai-usage" / "claude-status"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +66,7 @@ def write_snapshot(data, account):
         "schema_version": 1,
         "captured_at": time.time(),
         "account": account,
+        "auth": read_auth_snapshot(),
         "session_id": pick(data, "session_id"),
         "transcript_path": pick(data, "transcript_path"),
         "version": pick(data, "version"),

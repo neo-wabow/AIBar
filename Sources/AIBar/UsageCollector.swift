@@ -28,8 +28,12 @@ struct UsageCollector {
         }
 
         do {
-            let localClaude = try collectClaudeLocal(windows: windows)
-            let statuslineAccounts = collectClaudeStatuslineAccounts(localFallback: localClaude)
+            let currentClaudeAuthState = currentClaudeAuthState()
+            let localClaude = try collectClaudeLocal(windows: windows, currentAuthState: currentClaudeAuthState)
+            let statuslineAccounts = collectClaudeStatuslineAccounts(
+                localFallback: localClaude,
+                currentAuthState: currentClaudeAuthState
+            )
             if statuslineAccounts.isEmpty {
                 snapshot.claude = claudeCodePendingUsage(from: localClaude)
             } else {
@@ -100,7 +104,7 @@ struct UsageCollector {
         return usage
     }
 
-    private func collectClaudeLocal(windows: TimeWindows) throws -> ProviderUsage {
+    private func collectClaudeLocal(windows: TimeWindows, currentAuthState: ClaudeAuthState?) throws -> ProviderUsage {
         var usage = ProviderUsage(kind: .claude)
         let root = homeURL().appendingPathComponent(".claude/projects", isDirectory: true)
         let files = recentJSONLFiles(under: root, modifiedAfter: windows.weekStart)
@@ -147,13 +151,31 @@ struct UsageCollector {
             }
         }
 
-        usage.note = usage.events == 0 ? "找不到最近的 Claude usage 訊息" : "Claude 未在本機紀錄官方 quota / 剩餘百分比"
+        if let limitError = latestClaudeRateLimitError(
+            in: files,
+            notBefore: currentAuthState?.modifiedAt ?? windows.todayStart
+        ) {
+            usage.primaryLimit = limitError.limit
+            usage.planType = "rate-limit-error"
+            usage.limitErrorAt = limitError.timestamp
+            usage.latestEventAt = maxDate(usage.latestEventAt, limitError.timestamp)
+            if let reset = limitError.limit.resetsAt {
+                usage.note = "Claude Code 回報已達 session limit；重置 \(DateFormatters.reset.string(from: reset))"
+            } else {
+                usage.note = "Claude Code 回報已達 session limit"
+            }
+        } else {
+            usage.note = usage.events == 0 ? "找不到最近的 Claude usage 訊息" : "Claude 未在本機紀錄官方 quota / 剩餘百分比"
+        }
         return usage
     }
 
     private func claudeCodePendingUsage(from localFallback: ProviderUsage) -> ProviderUsage {
         var usage = localFallback
         usage.accountName = "Code"
+        if usage.planType == "rate-limit-error" {
+            return usage
+        }
         // Never synthesize Claude Code quota from Desktop cache or local token logs.
         // If official statusline limits are unavailable, show an unsynced state.
         usage.primaryLimit = nil
@@ -164,7 +186,10 @@ struct UsageCollector {
         return usage
     }
 
-    private func collectClaudeStatuslineAccounts(localFallback: ProviderUsage) -> [ProviderUsage] {
+    private func collectClaudeStatuslineAccounts(
+        localFallback: ProviderUsage,
+        currentAuthState: ClaudeAuthState?
+    ) -> [ProviderUsage] {
         let root = homeURL()
             .appendingPathComponent(".ai-usage", isDirectory: true)
             .appendingPathComponent("claude-status", isDirectory: true)
@@ -194,12 +219,18 @@ struct UsageCollector {
             usage.statuslineCapturedAt = parseDateValue(object["captured_at"])
                 ?? modificationDate(for: file)
             usage.latestEventAt = usage.statuslineCapturedAt
+            let staleReason = claudeAuthStaleReason(
+                snapshot: object,
+                accountName: accountName,
+                capturedAt: usage.statuslineCapturedAt,
+                currentAuthState: currentAuthState
+            ) ?? claudeStatuslineFreshnessStaleReason(capturedAt: usage.statuslineCapturedAt)
 
             if let model = object["model"] as? [String: Any] {
                 usage.latestModel = stringValue(model["display_name"]) ?? stringValue(model["id"])
             }
 
-            if let rateLimits = object["rate_limits"] as? [String: Any] {
+            if staleReason == nil, let rateLimits = object["rate_limits"] as? [String: Any] {
                 usage.primaryLimit = claudeRateWindow(from: rateLimits["five_hour"] as? [String: Any], windowMinutes: 5 * 60)
                 usage.secondaryLimit = claudeRateWindow(from: rateLimits["seven_day"] as? [String: Any], windowMinutes: 7 * 24 * 60)
             }
@@ -212,7 +243,8 @@ struct UsageCollector {
                 usage.sessionCostUSD = doubleValue(cost["total_cost_usd"])
             }
 
-            usage.note = claudeStatuslineNote(for: usage)
+            usage.note = staleReason ?? claudeStatuslineNote(for: usage)
+            applyClaudeRateLimitErrorOverride(from: localFallback, to: &usage)
             accounts.append(usage)
         }
 
@@ -229,6 +261,172 @@ struct UsageCollector {
         }
 
         return sortedAccounts
+    }
+
+    private func applyClaudeRateLimitErrorOverride(from localFallback: ProviderUsage, to usage: inout ProviderUsage) {
+        guard
+            localFallback.planType == "rate-limit-error",
+            let limitErrorAt = localFallback.limitErrorAt,
+            let localPrimaryLimit = localFallback.primaryLimit
+        else {
+            return
+        }
+
+        let statuslineCapturedAt = usage.statuslineCapturedAt ?? .distantPast
+        guard limitErrorAt >= statuslineCapturedAt else { return }
+
+        usage.primaryLimit = localPrimaryLimit
+        usage.secondaryLimit = nil
+        usage.planType = localFallback.planType
+        usage.limitErrorAt = limitErrorAt
+        usage.note = localFallback.note
+    }
+
+    private func latestClaudeRateLimitError(in files: [URL], notBefore: Date) -> ClaudeRateLimitError? {
+        var latest: ClaudeRateLimitError?
+
+        for file in files {
+            for line in readLines(from: file) where line.contains("\"rate_limit\"") || line.contains("\"apiErrorStatus\":429") {
+                guard
+                    let object = parseJSONObject(line),
+                    let timestamp = parseTimestamp(object["timestamp"] as? String),
+                    timestamp >= notBefore,
+                    (object["error"] as? String == "rate_limit" || intValue(object["apiErrorStatus"]) == 429),
+                    let text = claudeMessageText(from: object)
+                else {
+                    continue
+                }
+
+                guard let resetsAt = parseClaudeRateLimitReset(from: text, reference: timestamp), resetsAt > now else {
+                    continue
+                }
+
+                let candidate = ClaudeRateLimitError(
+                    timestamp: timestamp,
+                    limit: RateWindow(usedPercent: 100, windowMinutes: 5 * 60, resetsAt: resetsAt)
+                )
+
+                if latest == nil || candidate.timestamp > latest!.timestamp {
+                    latest = candidate
+                }
+            }
+        }
+
+        return latest
+    }
+
+    private func claudeMessageText(from object: [String: Any]) -> String? {
+        guard
+            let message = object["message"] as? [String: Any],
+            let content = message["content"] as? [[String: Any]]
+        else {
+            return nil
+        }
+
+        let text = content
+            .compactMap { $0["text"] as? String }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private func parseClaudeRateLimitReset(from text: String, reference: Date) -> Date? {
+        let pattern = #"resets\s+([0-9]{1,2}:[0-9]{2}\s*(?:am|pm|AM|PM))(?:\s*\(([^)]+)\))?"#
+        guard
+            let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+            let timeRange = Range(match.range(at: 1), in: text)
+        else {
+            return nil
+        }
+
+        let timeZone: TimeZone
+        if
+            match.numberOfRanges > 2,
+            let zoneRange = Range(match.range(at: 2), in: text),
+            let parsedZone = TimeZone(identifier: String(text[zoneRange]))
+        {
+            timeZone = parsedZone
+        } else {
+            timeZone = .current
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        formatter.dateFormat = "h:mma"
+
+        let compactTime = String(text[timeRange]).replacingOccurrences(of: " ", with: "").uppercased()
+        guard let parsedTime = formatter.date(from: compactTime) else {
+            return nil
+        }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let day = calendar.dateComponents([.year, .month, .day], from: reference)
+        let time = calendar.dateComponents([.hour, .minute], from: parsedTime)
+        var components = DateComponents()
+        components.timeZone = timeZone
+        components.year = day.year
+        components.month = day.month
+        components.day = day.day
+        components.hour = time.hour
+        components.minute = time.minute
+
+        guard var reset = calendar.date(from: components) else {
+            return nil
+        }
+
+        if reset <= reference.addingTimeInterval(-60) {
+            reset = calendar.date(byAdding: .day, value: 1, to: reset) ?? reset
+        }
+
+        return reset
+    }
+
+    private func currentClaudeAuthState() -> ClaudeAuthState? {
+        let configFile = homeURL().appendingPathComponent(".claude.json")
+        guard
+            let object = readJSONObject(from: configFile),
+            let oauth = object["oauthAccount"] as? [String: Any]
+        else {
+            return nil
+        }
+
+        return ClaudeAuthState(
+            email: stringValue(oauth["emailAddress"]),
+            organizationID: stringValue(oauth["organizationUuid"]),
+            organizationName: stringValue(oauth["organizationName"]),
+            modifiedAt: modificationDate(for: configFile)
+        )
+    }
+
+    private func claudeAuthStaleReason(
+        snapshot: [String: Any],
+        accountName: String,
+        capturedAt: Date?,
+        currentAuthState: ClaudeAuthState?
+    ) -> String? {
+        guard let currentAuthState else { return nil }
+
+        if let snapshotAuth = snapshot["auth"] as? [String: Any] {
+            let snapshotEmail = stringValue(snapshotAuth["email"])
+            let snapshotOrganizationID = stringValue(snapshotAuth["organization_uuid"])
+            if snapshotEmail != currentAuthState.email || snapshotOrganizationID != currentAuthState.organizationID {
+                return "Claude 已登入 \(currentAuthState.displayName)；需等下一次 Claude Code 回覆後更新官方 limits"
+            }
+            return nil
+        }
+
+        guard accountName == "default", let capturedAt, let authModifiedAt = currentAuthState.modifiedAt else {
+            return nil
+        }
+
+        if authModifiedAt > capturedAt.addingTimeInterval(1) {
+            return "Claude 登入狀態已於 \(DateFormatters.reset.string(from: authModifiedAt)) 變更；需等下一次 Claude Code 回覆後更新官方 limits"
+        }
+
+        return nil
     }
 
     private func recentJSONLFiles(under root: URL, modifiedAfter date: Date) -> [URL] {
@@ -350,8 +548,16 @@ struct UsageCollector {
             return "Claude rate limit 資料已過期；打開該帳號的 Claude Code 後會更新"
         }
 
-        if let capturedAt = usage.statuslineCapturedAt, now.timeIntervalSince(capturedAt) > 5 * 60 {
-            return "官方資料最後同步於 \(DateFormatters.reset.string(from: capturedAt))；該帳號下一次 Claude Code 回覆後會刷新"
+        return nil
+    }
+
+    private func claudeStatuslineFreshnessStaleReason(capturedAt: Date?) -> String? {
+        guard let capturedAt else {
+            return "尚未收到 Claude Code 官方 limits；請重啟 Claude Code 或送出一則訊息後再重新整理"
+        }
+
+        if now.timeIntervalSince(capturedAt) > 5 * 60 {
+            return "Claude 官方資料最後同步於 \(DateFormatters.reset.string(from: capturedAt))；需等下一次 Claude Code 回覆後更新 limits"
         }
 
         return nil
@@ -390,6 +596,11 @@ struct UsageCollector {
         return values?.contentModificationDate
     }
 
+    private func maxDate(_ lhs: Date?, _ rhs: Date) -> Date {
+        guard let lhs else { return rhs }
+        return max(lhs, rhs)
+    }
+
     private func homeURL() -> URL {
         fileManager.homeDirectoryForCurrentUser
     }
@@ -413,4 +624,26 @@ private struct TimeWindows {
     func dayStart(for date: Date) -> Date {
         calendar.startOfDay(for: date)
     }
+}
+
+private struct ClaudeAuthState {
+    let email: String?
+    let organizationID: String?
+    let organizationName: String?
+    let modifiedAt: Date?
+
+    var displayName: String {
+        if let email {
+            return email
+        }
+        if let organizationName {
+            return organizationName
+        }
+        return "目前帳號"
+    }
+}
+
+private struct ClaudeRateLimitError {
+    let timestamp: Date
+    let limit: RateWindow
 }
