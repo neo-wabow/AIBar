@@ -17,6 +17,15 @@ A macOS menu bar app for checking local Codex and Claude usage.
 
 彈出視窗底部的電源按鈕可離開 AIBar。
 
+## 環境要求
+
+- macOS 13 或更新版本
+- Swift 5.9 相容工具鏈，或已安裝 Xcode Command Line Tools
+- Codex 用量需要本機 `~/.codex/sessions/**/*.jsonl`
+- Claude 官方剩餘額度需要 Claude Code、`python3`，並安裝 Claude Code statusline hook
+
+未安裝 Claude statusline hook 時，AIBar 仍可讀取本機 Claude token usage，但官方 quota / 剩餘百分比會顯示未同步。
+
 ## 建置
 
 ```sh
