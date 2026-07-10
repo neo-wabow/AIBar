@@ -11,6 +11,9 @@ struct AccountsSettingsView: View {
 
     @State private var discovered: [DiscoveredClaudeAccount] = []
     @State private var isScanning = false
+    /// The config dir of an in-progress "登入新帳號" flow; once a login lands there,
+    /// the account is added automatically using its email as the label.
+    @State private var pendingLoginConfigDir: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -33,6 +36,10 @@ struct AccountsSettingsView: View {
         .padding(18)
         .frame(minWidth: 420, minHeight: 440, alignment: .topLeading)
         .onAppear(perform: scan)
+        .onReceive(NotificationCenter.default.publisher(for: .aibarAccountsRescan)) { _ in
+            scan()
+            onChange()
+        }
     }
 
     private var monitoredSection: some View {
@@ -103,7 +110,7 @@ struct AccountsSettingsView: View {
 
     private var addSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
+            HStack(spacing: 8) {
                 Text("加入帳號")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -111,6 +118,15 @@ struct AccountsSettingsView: View {
                     ProgressView().controlSize(.small)
                 }
                 Spacer()
+                Button {
+                    scan()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .controlSize(.small)
+                .help("重新掃描")
+                Button("登入新帳號…", action: loginNewAccount)
+                    .controlSize(.small)
                 Button("選擇資料夾…", action: pickFolder)
                     .controlSize(.small)
             }
@@ -169,6 +185,16 @@ struct AccountsSettingsView: View {
             await MainActor.run {
                 discovered = found
                 isScanning = false
+                // A just-finished "登入新帳號" flow: add it automatically, using the
+                // account's email as the label.
+                if
+                    let pending = pendingLoginConfigDir,
+                    let account = found.first(where: { $0.configDir == pending })
+                {
+                    store.add(ClaudeAccountEntry(label: account.suggestedLabel, configDir: pending))
+                    pendingLoginConfigDir = nil
+                    onChange()
+                }
             }
         }
     }
@@ -183,6 +209,56 @@ struct AccountsSettingsView: View {
             )
         )
         onChange()
+    }
+
+    /// Opens Terminal running the CLI login for a fresh, auto-named config dir, so a
+    /// web/desktop-only account can be authenticated once without typing anything.
+    /// After login, the account is added automatically with its email as the label.
+    private func loginNewAccount() {
+        let (name, path) = freshConfigDir()
+        pendingLoginConfigDir = path
+        openTerminalLogin(configDirName: name)
+    }
+
+    /// Picks a `.claude-accountN` dir that doesn't exist yet and isn't already used.
+    private func freshConfigDir() -> (name: String, path: String) {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        var index = 1
+        while true {
+            let name = index == 1 ? ".claude-account" : ".claude-account\(index)"
+            let path = home.appendingPathComponent(name).path
+            if !FileManager.default.fileExists(atPath: path) && !store.contains(configDir: path) {
+                return (name, path)
+            }
+            index += 1
+        }
+    }
+
+    private func openTerminalLogin(configDirName: String) {
+        // Write a .command script and open it: opening a document launches Terminal
+        // without AIBar needing the Automation ("control Terminal") permission that
+        // AppleScript would require. `claude` in a fresh config dir starts the
+        // browser OAuth login flow.
+        let script = """
+        #!/bin/bash
+        echo "———————————————————————————————————————————"
+        echo " 用你要新增的 Claude 帳號在瀏覽器登入。"
+        echo " 登入完成後,關閉這個視窗、切回 AIBar —"
+        echo " 新帳號會用它的 Email 自動加入監看。"
+        echo "———————————————————————————————————————————"
+        CLAUDE_CONFIG_DIR="$HOME/\(configDirName)" claude
+        """
+        let directory = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ai-usage", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("login-\(configDirName).command")
+        do {
+            try script.write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        } catch {
+            return
+        }
+        NSWorkspace.shared.open(file)
     }
 
     private func pickFolder() {

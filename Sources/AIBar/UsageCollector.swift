@@ -216,8 +216,15 @@ struct UsageCollector {
 
         for account in cloud {
             let key = mergeKey(account.claudeMergeKey ?? account.accountName)
-            if let existing = chosen[key] {
-                if !existing.hasOfficialLimits {
+            if var existing = chosen[key] {
+                if existing.hasOfficialLimits {
+                    // Statusline data is richer, but prefer the configured label
+                    // (e.g. the account email) over the config-dir-derived name.
+                    if let label = account.accountName, !label.isEmpty {
+                        existing.accountName = label
+                        chosen[key] = existing
+                    }
+                } else {
                     chosen[key] = account
                 }
             } else {
