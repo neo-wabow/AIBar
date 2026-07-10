@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let store = UsageStore()
+    private let accountsStore = ClaudeAccountsStore()
     private let popover = NSPopover()
     private var statusItem: NSStatusItem?
     private var statusView: MenuBarStatusItemView?
@@ -57,9 +58,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.delegate = self
         popover.contentSize = store.popoverSize
         popover.contentViewController = NSHostingController(
-            rootView: UsagePopover(store: store)
-                .frame(width: store.popoverSize.width)
+            rootView: UsagePopover(store: store, onManageAccounts: { [weak self] in
+                self?.showAccountsWindow()
+            })
+            .frame(width: store.popoverSize.width)
         )
+    }
+
+    private func showAccountsWindow() {
+        AccountsWindowController.shared.show(store: accountsStore) { [weak self] in
+            self?.accountsStore.load()
+            Task { await self?.store.refresh() }
+        }
     }
 
     private func bindStore() {

@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct UsagePopover: View {
     @ObservedObject var store: UsageStore
+    var onManageAccounts: () -> Void = {}
     @State private var draggedKind: ProviderKind?
 
     private let providerRowSpacing = UsageStore.providerRowSpacing
@@ -102,6 +103,16 @@ struct UsagePopover: View {
                 .lineLimit(1)
 
             Spacer()
+
+            Button {
+                onManageAccounts()
+            } label: {
+                Image(systemName: "person.2.badge.plus")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .help("管理 Claude 帳號")
 
             Button {
                 NSApplication.shared.terminate(nil)

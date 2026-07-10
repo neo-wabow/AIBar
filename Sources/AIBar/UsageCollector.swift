@@ -209,13 +209,13 @@ struct UsageCollector {
         var chosen: [String: ProviderUsage] = [:]
 
         for account in statusline {
-            let key = mergeKey(account.accountName)
+            let key = mergeKey(account.claudeMergeKey ?? account.accountName)
             if chosen[key] == nil { order.append(key) }
             chosen[key] = account
         }
 
         for account in cloud {
-            let key = mergeKey(account.accountName)
+            let key = mergeKey(account.claudeMergeKey ?? account.accountName)
             if let existing = chosen[key] {
                 if !existing.hasOfficialLimits {
                     chosen[key] = account

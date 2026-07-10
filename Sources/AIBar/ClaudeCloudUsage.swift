@@ -54,6 +54,7 @@ struct ClaudeCloudCollector {
 
     private func pendingUsage(for config: ClaudeAccountConfig, reason: String) -> ProviderUsage {
         var usage = ProviderUsage(kind: .claude, accountName: config.label)
+        usage.claudeMergeKey = ClaudeCloudClient.statuslineName(configDir: config.configDir)
         usage.planType = "cloud"
         usage.note = reason
         return usage
@@ -64,24 +65,20 @@ struct ClaudeCloudCollector {
             .appendingPathComponent(".ai-usage", isDirectory: true)
             .appendingPathComponent("claude-accounts.json")
         guard
-            let data = try? Data(contentsOf: url), !data.isEmpty,
-            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            let rawAccounts = object["accounts"] as? [[String: Any]]
+            let data = try? Data(contentsOf: url),
+            let file = try? JSONDecoder().decode(ClaudeAccountsFile.self, from: data)
         else {
             return []
         }
 
-        return rawAccounts.enumerated().compactMap { index, entry in
-            let configDir = (entry["configDir"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            let keychainService = (entry["keychainService"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            let keychainAccount = (entry["account"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            let label = (entry["label"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-                ?? defaultLabel(configDir: configDir, index: index)
+        return file.accounts.enumerated().map { index, entry in
+            let configDir = entry.configDir.flatMap { $0.isEmpty ? nil : $0 }
+            let label = entry.label.isEmpty ? defaultLabel(configDir: configDir, index: index) : entry.label
             return ClaudeAccountConfig(
                 label: label,
                 configDir: configDir,
-                keychainServiceOverride: keychainService,
-                keychainAccountOverride: keychainAccount
+                keychainServiceOverride: entry.keychainService.flatMap { $0.isEmpty ? nil : $0 },
+                keychainAccountOverride: entry.account.flatMap { $0.isEmpty ? nil : $0 }
             )
         }
     }
@@ -184,7 +181,23 @@ struct ClaudeCloudClient {
         }
 
         let usageJSON = try requestUsage(accessToken: accessToken)
-        return providerUsage(from: usageJSON, label: config.label)
+        var usage = providerUsage(from: usageJSON, label: config.label)
+        usage.claudeMergeKey = Self.statuslineName(configDir: config.configDir)
+        return usage
+    }
+
+    /// The account name the statusline hook would derive for a config dir, used to
+    /// dedupe cloud accounts against statusline accounts. Mirrors the hook: the
+    /// default dir is "default"; otherwise the dir's basename with unsafe
+    /// characters collapsed to "-" and leading/trailing ".-" trimmed.
+    static func statuslineName(configDir: String?) -> String {
+        guard let configDir, !configDir.isEmpty else { return "default" }
+        let base = (configDir as NSString).lastPathComponent
+        let collapsed = base.replacingOccurrences(
+            of: #"[^A-Za-z0-9._-]+"#, with: "-", options: .regularExpression
+        )
+        let trimmed = collapsed.trimmingCharacters(in: CharacterSet(charactersIn: ".-"))
+        return trimmed.isEmpty ? "default" : String(trimmed.prefix(80))
     }
 
     // MARK: - HTTP

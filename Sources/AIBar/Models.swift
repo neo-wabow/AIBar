@@ -79,6 +79,10 @@ struct ProviderUsage: Identifiable, Equatable {
 
     var kind: ProviderKind
     var accountName: String?
+    /// Identity used to dedupe the same account across the statusline and cloud
+    /// sources; aligns with the statusline account name derived from the config
+    /// dir. Falls back to `accountName` when nil.
+    var claudeMergeKey: String?
     var today = TokenTotals()
     var rollingFiveHours = TokenTotals()
     var dailyTotals: [Date: TokenTotals] = [:]
