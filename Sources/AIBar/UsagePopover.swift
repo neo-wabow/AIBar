@@ -6,8 +6,7 @@ struct UsagePopover: View {
     @ObservedObject var store: UsageStore
     @State private var draggedKind: ProviderKind?
 
-    private let providerRowHeight: CGFloat = 76
-    private let providerRowSpacing: CGFloat = 8
+    private let providerRowSpacing = UsageStore.providerRowSpacing
 
     var body: some View {
         ZStack {
@@ -22,7 +21,7 @@ struct UsagePopover: View {
             .ignoresSafeArea()
 
             VStack(spacing: 9) {
-                ScrollView(.vertical, showsIndicators: store.visibleProviders.count > 2) {
+                ScrollView(.vertical, showsIndicators: listScrolls) {
                     VStack(spacing: providerRowSpacing) {
                         ForEach(store.visibleProviders) { provider in
                             providerCard(for: provider)
@@ -49,10 +48,17 @@ struct UsagePopover: View {
     }
 
     private var providerListHeight: CGFloat {
-        let count = max(store.visibleProviders.count, 1)
-        let fullHeight = CGFloat(count) * providerRowHeight + CGFloat(count - 1) * providerRowSpacing
-        let maxHeight: CGFloat = store.snapshot.errors.isEmpty ? 160 : 112
-        return min(fullHeight, maxHeight)
+        UsageStore.providerListHeight(
+            rowCount: max(store.visibleProviders.count, 1),
+            hasErrors: !store.snapshot.errors.isEmpty
+        )
+    }
+
+    private var listScrolls: Bool {
+        UsageStore.providerListScrolls(
+            rowCount: store.visibleProviders.count,
+            hasErrors: !store.snapshot.errors.isEmpty
+        )
     }
 
     private var displayControls: some View {

@@ -17,11 +17,11 @@ struct MenuBarStatusLine: Equatable {
 final class UsageStore: ObservableObject {
     @Published private(set) var snapshot = UsageSnapshot()
     @Published private(set) var isRefreshing = false
-    @Published private(set) var nextRefreshAt = Date().addingTimeInterval(15)
+    @Published private(set) var nextRefreshAt = Date().addingTimeInterval(60)
 
     let preferences: DisplayPreferences
 
-    private static let refreshInterval: TimeInterval = 15
+    private static let refreshInterval: TimeInterval = 60
     private var timer: Timer?
     private var preferenceCancellable: AnyCancellable?
 
@@ -52,15 +52,34 @@ final class UsageStore: ObservableObject {
         snapshot.providers(orderedBy: preferences.order, mode: preferences.mode)
     }
 
+    // Provider card metrics, shared with UsagePopover so the window height and the
+    // scrollable list stay in sync as the number of accounts grows.
+    static let providerRowHeight: CGFloat = 76
+    static let providerRowSpacing: CGFloat = 8
+
+    /// Height of the (possibly scrolling) provider list: shows up to a cap of rows,
+    /// beyond which the list scrolls. The cap is lower when an error panel is shown.
+    static func providerListHeight(rowCount: Int, hasErrors: Bool) -> CGFloat {
+        let cap = hasErrors ? 3 : 4
+        let visibleRows = max(1, min(rowCount, cap))
+        return CGFloat(visibleRows) * providerRowHeight
+            + CGFloat(max(visibleRows - 1, 0)) * providerRowSpacing
+    }
+
+    static func providerListScrolls(rowCount: Int, hasErrors: Bool) -> Bool {
+        rowCount > (hasErrors ? 3 : 4)
+    }
+
     var popoverSize: CGSize {
         CGSize(width: 400, height: ceil(popoverContentHeight))
     }
 
     private var popoverContentHeight: CGFloat {
         let rowCount = max(visibleProviders.count, 1)
-        let rowGaps = max(rowCount - 1, 0)
-        let fullProviderListHeight = CGFloat(rowCount) * 76 + CGFloat(rowGaps) * 8
-        let providerListHeight = min(fullProviderListHeight, snapshot.errors.isEmpty ? 160 : 112)
+        let providerListHeight = Self.providerListHeight(
+            rowCount: rowCount,
+            hasErrors: !snapshot.errors.isEmpty
+        )
         let controlsHeight: CGFloat = 41
         let footerHeight: CGFloat = 28
         let verticalPadding: CGFloat = 24
