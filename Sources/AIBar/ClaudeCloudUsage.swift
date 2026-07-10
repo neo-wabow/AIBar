@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// Fetches live official Claude quota via the OAuth usage endpoint, reading each
 /// account's OAuth token from the macOS Keychain — the same storage the Claude Code
@@ -159,10 +158,10 @@ struct ClaudeCloudClient {
     let now: Date
 
     func fetchUsage(for config: ClaudeAccountConfig) throws -> ProviderUsage {
-        let service = config.keychainServiceOverride ?? Self.keychainService(configDir: config.configDir)
-        let account = config.keychainAccountOverride ?? Self.keychainAccountName()
+        let service = config.keychainServiceOverride ?? ClaudeKeychain.serviceName(configDir: config.configDir)
+        let account = config.keychainAccountOverride ?? ClaudeKeychain.accountName()
 
-        guard let blob = readKeychain(service: service, account: account) else {
+        guard let blob = ClaudeKeychain.read(service: service, account: account) else {
             throw ClaudeCloudError.noKeychainEntry
         }
         guard
@@ -186,72 +185,6 @@ struct ClaudeCloudClient {
 
         let usageJSON = try requestUsage(accessToken: accessToken)
         return providerUsage(from: usageJSON, label: config.label)
-    }
-
-    // MARK: - Keychain service naming (mirrors Claude Code g5())
-
-    static func keychainService(configDir: String?) -> String {
-        let base = "Claude Code-credentials"
-        guard let configDir, !configDir.isEmpty else { return base }
-        let defaultDir = (NSHomeDirectory() as NSString).appendingPathComponent(".claude")
-        if (configDir as NSString).standardizingPath == (defaultDir as NSString).standardizingPath {
-            return base
-        }
-        let normalized = configDir.precomposedStringWithCanonicalMapping // NFC
-        let hash = SHA256.hash(data: Data(normalized.utf8))
-            .map { String(format: "%02x", $0) }
-            .joined()
-            .prefix(8)
-        return "\(base)-\(hash)"
-    }
-
-    static func keychainAccountName() -> String {
-        let name = ProcessInfo.processInfo.environment["USER"] ?? NSUserName()
-        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
-        return name.unicodeScalars.allSatisfy(allowed.contains) && !name.isEmpty ? name : "claude-code-user"
-    }
-
-    // MARK: - Keychain I/O (shell out to /usr/bin/security to avoid ACL prompts)
-
-    private func readKeychain(service: String, account: String) -> String? {
-        let result = runSecurity(["find-generic-password", "-a", account, "-w", "-s", service])
-        guard result.status == 0 else { return nil }
-        let trimmed = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func writeKeychain(service: String, account: String, json: [String: Any]) throws {
-        guard let data = try? JSONSerialization.data(withJSONObject: json) else {
-            throw ClaudeCloudError.refreshFailed("無法序列化更新後的憑證")
-        }
-        let hex = data.map { String(format: "%02x", $0) }.joined()
-        let result = runSecurity(["add-generic-password", "-U", "-a", account, "-s", service, "-X", hex])
-        guard result.status == 0 else {
-            throw ClaudeCloudError.refreshFailed("寫回 Keychain 失敗(security rc=\(result.status))")
-        }
-    }
-
-    private func runSecurity(_ arguments: [String]) -> (status: Int32, stdout: String, stderr: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        process.arguments = arguments
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-        do {
-            try process.run()
-        } catch {
-            return (-1, "", error.localizedDescription)
-        }
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return (
-            process.terminationStatus,
-            String(decoding: outData, as: UTF8.self),
-            String(decoding: errData, as: UTF8.self)
-        )
     }
 
     // MARK: - HTTP
@@ -321,7 +254,7 @@ struct ClaudeCloudClient {
         // CLI refresh, then merge only the token fields we changed.
         var mergedRoot = root
         if
-            let fresh = readKeychain(service: service, account: account),
+            let fresh = ClaudeKeychain.read(service: service, account: account),
             let freshRoot = (try? JSONSerialization.jsonObject(with: Data(fresh.utf8))) as? [String: Any]
         {
             mergedRoot = freshRoot
@@ -337,7 +270,9 @@ struct ClaudeCloudClient {
         mergedRoot["claudeAiOauth"] = mergedOauth
         oauth = mergedOauth
 
-        try writeKeychain(service: service, account: account, json: mergedRoot)
+        guard ClaudeKeychain.write(service: service, account: account, json: mergedRoot) else {
+            throw ClaudeCloudError.refreshFailed("寫回 Keychain 失敗")
+        }
         return newAccess
     }
 
