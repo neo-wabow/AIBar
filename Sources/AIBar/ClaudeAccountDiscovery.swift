@@ -35,6 +35,7 @@ struct ClaudeAccountDiscovery {
 
     func discover() -> [DiscoveredClaudeAccount] {
         let account = ClaudeKeychain.accountName()
+        let client = ClaudeCloudClient(now: Date())
         var results: [DiscoveredClaudeAccount] = []
 
         for configDir in candidateConfigDirs() {
@@ -43,18 +44,23 @@ struct ClaudeAccountDiscovery {
                 let blob = ClaudeKeychain.read(service: service, account: account),
                 let root = (try? JSONSerialization.jsonObject(with: Data(blob.utf8))) as? [String: Any],
                 let oauth = root["claudeAiOauth"] as? [String: Any],
-                (oauth["accessToken"] as? String)?.isEmpty == false
+                let accessToken = oauth["accessToken"] as? String,
+                !accessToken.isEmpty
             else {
                 continue
             }
 
-            let identity = authIdentity(configDir: configDir)
+            // /api/oauth/profile is authoritative for which account this token
+            // belongs to; ~/.claude.json's oauthAccount can be stale. Fall back to
+            // it only when the profile call is unavailable (e.g. offline/expired).
+            let profile = client.fetchProfile(accessToken: accessToken)
+            let fallback = authIdentity(configDir: configDir)
             results.append(
                 DiscoveredClaudeAccount(
                     configDir: configDir,
                     keychainService: service,
-                    email: identity?.email,
-                    organizationName: identity?.organizationName,
+                    email: profile?.email ?? fallback?.email,
+                    organizationName: profile?.organizationName ?? fallback?.organizationName,
                     subscriptionType: oauth["subscriptionType"] as? String
                 )
             )

@@ -41,34 +41,64 @@ struct AccountsSettingsView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.secondary)
 
-            if store.accounts.isEmpty {
-                Text("尚未加入額外帳號。目前只顯示預設 CLI 帳號(statusline)。")
+            if defaultAccount == nil && configuredExtras.isEmpty {
+                Text(isScanning ? "掃描已登入帳號…" : "找不到已登入的 Claude 帳號。")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-            } else {
-                ForEach(store.accounts) { entry in
-                    HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(entry.label).font(.system(size: 13, weight: .medium))
-                            Text(entry.configDir ?? "預設 ~/.claude")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button {
-                            store.remove(entry)
-                            onChange()
-                            scan()
-                        } label: {
-                            Image(systemName: "minus.circle.fill").foregroundStyle(.red)
-                        }
-                        .buttonStyle(.plain)
-                        .help("移除")
+            }
+
+            // The default CLI account is always monitored via statusline.
+            if let defaultAccount {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(defaultAccount.suggestedLabel).font(.system(size: 13, weight: .medium))
+                        Text(subtitle(for: defaultAccount))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(.vertical, 3)
+                    Spacer()
+                    Text("自動")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.secondary.opacity(0.15), in: Capsule())
                 }
+                .padding(.vertical, 3)
+            }
+
+            ForEach(configuredExtras) { entry in
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(entry.label).font(.system(size: 13, weight: .medium))
+                        Text(entry.configDir ?? "預設 ~/.claude")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button {
+                        store.remove(entry)
+                        onChange()
+                        scan()
+                    } label: {
+                        Image(systemName: "minus.circle.fill").foregroundStyle(.red)
+                    }
+                    .buttonStyle(.plain)
+                    .help("移除")
+                }
+                .padding(.vertical, 3)
             }
         }
+    }
+
+    /// The default `~/.claude` account, monitored automatically via statusline.
+    private var defaultAccount: DiscoveredClaudeAccount? {
+        discovered.first { $0.configDir == nil }
+    }
+
+    /// Extra (non-default) accounts the user has explicitly added.
+    private var configuredExtras: [ClaudeAccountEntry] {
+        store.accounts.filter { ($0.configDir?.isEmpty == false) }
     }
 
     private var addSection: some View {
@@ -115,7 +145,10 @@ struct AccountsSettingsView: View {
 
     private var addableAccounts: [DiscoveredClaudeAccount] {
         discovered.filter { account in
-            !store.accounts.contains { $0.id == ClaudeAccountEntry(label: "", configDir: account.configDir).id }
+            // Exclude the default account (already monitored automatically) and any
+            // account the user has already added.
+            account.configDir != nil
+                && !store.accounts.contains { $0.id == ClaudeAccountEntry(label: "", configDir: account.configDir).id }
         }
     }
 

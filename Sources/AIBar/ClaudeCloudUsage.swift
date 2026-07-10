@@ -138,6 +138,7 @@ enum ClaudeCloudError: Error {
 /// intended to run on the background thread that `UsageCollector.collect()` uses.
 struct ClaudeCloudClient {
     static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+    static let profileURL = URL(string: "https://api.anthropic.com/api/oauth/profile")!
     static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
     static let defaultClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     static let oauthBeta = "oauth-2025-04-20"
@@ -201,6 +202,29 @@ struct ClaudeCloudClient {
     }
 
     // MARK: - HTTP
+
+    /// The authoritative account identity for a token. `~/.claude.json` can be
+    /// stale, so this is the source of truth for which account a token belongs to.
+    func fetchProfile(accessToken: String) -> (email: String?, organizationName: String?)? {
+        var request = URLRequest(url: Self.profileURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue(Self.oauthBeta, forHTTPHeaderField: "anthropic-beta")
+        request.setValue(Self.anthropicVersion, forHTTPHeaderField: "anthropic-version")
+
+        let (data, response, _) = sendSynchronously(request)
+        guard
+            let response, response.statusCode == 200, let data,
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else {
+            return nil
+        }
+        let account = object["account"] as? [String: Any]
+        let organization = object["organization"] as? [String: Any]
+        return (account?["email"] as? String, organization?["name"] as? String)
+    }
 
     private func requestUsage(accessToken: String) throws -> [String: Any] {
         var request = URLRequest(url: Self.usageURL)
