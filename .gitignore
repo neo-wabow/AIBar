@@ -5,3 +5,6 @@
 
 # Packaged app output
 dist/
+
+# Local design/research notes (contains reverse-engineering + credential-store details; keep out of public repo)
+docs/multi-account-claude-quota.md
