@@ -33,12 +33,18 @@ enum SnapshotText {
             if let reset = primary.resetsAt {
                 parts.append("primary_reset=\(DateFormatters.reset.string(from: reset))")
             }
+            if primary.isExpired {
+                parts.append("primary_expired=true")
+            }
         }
         if let secondary = usage.secondaryLimit {
             parts.append("secondary_remaining=\(TokenFormat.percent(secondary.remainingPercent))")
             parts.append("secondary_used=\(TokenFormat.percent(secondary.usedPercent))")
             if let reset = secondary.resetsAt {
                 parts.append("secondary_reset=\(DateFormatters.reset.string(from: reset))")
+            }
+            if secondary.isExpired {
+                parts.append("secondary_expired=true")
             }
         }
         if let latestModel = usage.latestModel {

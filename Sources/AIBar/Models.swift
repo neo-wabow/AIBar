@@ -61,6 +61,7 @@ struct RateWindow: Equatable {
     var usedPercent: Double?
     var windowMinutes: Int?
     var resetsAt: Date?
+    var isExpired = false
 
     var remainingPercent: Double? {
         guard let usedPercent else { return nil }

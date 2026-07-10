@@ -51,6 +51,7 @@ struct ProviderCard: View {
                 title: "5 小時",
                 remaining: primaryRemaining,
                 resetAt: usage.primaryLimit?.resetsAt,
+                isExpired: usage.primaryLimit?.isExpired == true,
                 accent: accent,
                 unavailableText: unavailableText
             )
@@ -60,6 +61,7 @@ struct ProviderCard: View {
                 title: secondaryTitle,
                 remaining: secondaryRemaining,
                 resetAt: usage.secondaryLimit?.resetsAt,
+                isExpired: usage.secondaryLimit?.isExpired == true,
                 accent: accent,
                 unavailableText: unavailableText
             )
@@ -121,6 +123,7 @@ private struct RemainingStrip: View {
     let title: String
     let remaining: Double?
     let resetAt: Date?
+    let isExpired: Bool
     let accent: Color
     let unavailableText: String
 
@@ -136,20 +139,23 @@ private struct RemainingStrip: View {
 
                 Text(percentText)
                     .font(.system(size: 24, weight: .semibold, design: .rounded))
-                    .foregroundStyle(limitColor)
+                    .foregroundStyle(displayColor)
                     .lineLimit(1)
                     .minimumScaleFactor(0.70)
             }
 
-            UsageProgressBar(value: progressValue, fill: limitColor)
+            UsageProgressBar(value: progressValue, fill: displayColor)
                 .frame(height: 6)
 
-            Text(resetText)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(AppColors.tertiary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.68)
+            if let resetText {
+                Text(resetText)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(AppColors.tertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.68)
+            }
         }
+        .help(isExpired ? "這是最後同步值；下一次 Codex 回覆後更新" : "")
     }
 
     private var progressValue: Double {
@@ -162,10 +168,15 @@ private struct RemainingStrip: View {
         return TokenFormat.percent(remaining)
     }
 
-    private var resetText: String {
+    private var resetText: String? {
+        guard !isExpired else { return nil }
         guard remaining != nil else { return unavailableText }
         guard let resetAt else { return "重置 --" }
         return "重置 \(DateFormatters.reset.string(from: resetAt))"
+    }
+
+    private var displayColor: Color {
+        isExpired ? limitColor.opacity(0.45) : limitColor
     }
 
     private var limitColor: Color {

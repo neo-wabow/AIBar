@@ -5,13 +5,19 @@ struct UsageCollector {
     private let calendar: Calendar
     private let now: Date
     private let isoFormatter: ISO8601DateFormatter
+    private let environment: [String: String]
 
-    init(fileManager: FileManager = .default, now: Date = Date()) {
+    init(
+        fileManager: FileManager = .default,
+        now: Date = Date(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) {
         self.fileManager = fileManager
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = .current
         self.calendar = calendar
         self.now = now
+        self.environment = environment
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         self.isoFormatter = formatter
@@ -48,8 +54,24 @@ struct UsageCollector {
     }
 
     private func collectCodex(windows: TimeWindows) throws -> ProviderUsage {
+        let roots = codexSessionRoots()
+        var checkedRoots: [URL] = []
+
+        for root in roots {
+            checkedRoots.append(root)
+            let usage = collectCodex(windows: windows, root: root)
+            if usage.events > 0 {
+                return usage
+            }
+        }
+
         var usage = ProviderUsage(kind: .codex)
-        let root = homeURL().appendingPathComponent(".codex/sessions", isDirectory: true)
+        usage.note = codexNoEventsNote(roots: checkedRoots)
+        return usage
+    }
+
+    private func collectCodex(windows: TimeWindows, root: URL) -> ProviderUsage {
+        var usage = ProviderUsage(kind: .codex)
         let files = recentJSONLFiles(under: root, modifiedAfter: windows.weekStart)
         usage.sourceFiles = files.count
         var latestLimitEventAt: Date?
@@ -100,7 +122,6 @@ struct UsageCollector {
             }
         }
 
-        usage.note = usage.events == 0 ? "找不到最近的 Codex token_count 事件" : nil
         return usage
     }
 
@@ -501,15 +522,18 @@ struct UsageCollector {
 
     private func rateWindow(from dictionary: [String: Any]?) -> RateWindow? {
         guard let dictionary else { return nil }
+        let usedPercent = doubleValue(dictionary["used_percent"])
         let reset = intValue(dictionary["resets_at"])
         let resetsAt = reset > 0 ? Date(timeIntervalSince1970: TimeInterval(reset)) : nil
-        if let resetsAt, resetsAt <= now {
+        let isExpired = resetsAt.map { $0 <= now } ?? false
+        guard usedPercent != nil || (resetsAt != nil && !isExpired) else {
             return nil
         }
         return RateWindow(
-            usedPercent: doubleValue(dictionary["used_percent"]),
+            usedPercent: usedPercent,
             windowMinutes: intValue(dictionary["window_minutes"]),
-            resetsAt: resetsAt
+            resetsAt: resetsAt,
+            isExpired: isExpired
         )
     }
 
@@ -605,6 +629,70 @@ struct UsageCollector {
     private func maxDate(_ lhs: Date?, _ rhs: Date) -> Date {
         guard let lhs else { return rhs }
         return max(lhs, rhs)
+    }
+
+    private func codexSessionRoots() -> [URL] {
+        var roots: [URL] = []
+        if let configuredHome = configuredCodexHomeURL() {
+            roots.append(configuredHome.appendingPathComponent("sessions", isDirectory: true))
+        }
+        roots.append(homeURL().appendingPathComponent(".codex/sessions", isDirectory: true))
+        return uniqueURLs(roots)
+    }
+
+    private func configuredCodexHomeURL() -> URL? {
+        guard
+            let rawPath = environment["CODEX_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !rawPath.isEmpty
+        else {
+            return nil
+        }
+
+        return URL(fileURLWithPath: expandedHomePath(rawPath), isDirectory: true)
+            .standardizedFileURL
+    }
+
+    private func expandedHomePath(_ path: String) -> String {
+        if path == "~" {
+            return homeURL().path
+        }
+        if path.hasPrefix("~/") {
+            return homeURL().appendingPathComponent(String(path.dropFirst(2))).path
+        }
+        return path
+    }
+
+    private func uniqueURLs(_ urls: [URL]) -> [URL] {
+        var seenPaths = Set<String>()
+        return urls.filter { seenPaths.insert($0.standardizedFileURL.path).inserted }
+    }
+
+    private func codexNoEventsNote(roots: [URL]) -> String {
+        let checked = roots.map(codexDisplayPath).joined(separator: "、")
+        return "找不到最近的 Codex token_count 事件；已檢查 \(checked)"
+    }
+
+    private func codexDisplayPath(_ url: URL) -> String {
+        let standardizedPath = url.standardizedFileURL.path
+        if let configuredHome = configuredCodexHomeURL() {
+            let configuredSessions = configuredHome
+                .appendingPathComponent("sessions", isDirectory: true)
+                .standardizedFileURL
+                .path
+            if standardizedPath == configuredSessions {
+                return "$CODEX_HOME/sessions"
+            }
+        }
+
+        let defaultSessions = homeURL()
+            .appendingPathComponent(".codex/sessions", isDirectory: true)
+            .standardizedFileURL
+            .path
+        if standardizedPath == defaultSessions {
+            return "~/.codex/sessions"
+        }
+
+        return standardizedPath
     }
 
     private func homeURL() -> URL {
