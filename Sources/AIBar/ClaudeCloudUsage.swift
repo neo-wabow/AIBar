@@ -143,10 +143,18 @@ enum ClaudeCloudError: Error {
 struct ClaudeCloudClient {
     static let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     static let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
-    static let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    static let defaultClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     static let oauthBeta = "oauth-2025-04-20"
     static let anthropicVersion = "2023-06-01"
     static let refreshSkewSeconds: TimeInterval = 120
+
+    /// The OAuth client id used for token refresh. Mirrors the CLI: an explicit
+    /// `CLAUDE_CODE_OAUTH_CLIENT_ID` wins, otherwise the production client id.
+    static var clientID: String {
+        let override = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_CLIENT_ID"]
+        if let override, !override.isEmpty { return override }
+        return defaultClientID
+    }
 
     let now: Date
 
@@ -286,6 +294,8 @@ struct ClaudeCloudClient {
             "client_id": Self.clientID,
             "scope": scopes.joined(separator: " ")
         ]
+        // Refresh must use the same client_id the token was issued under. Honour the
+        // CLI's CLAUDE_CODE_OAUTH_CLIENT_ID override; otherwise use the production id.
 
         var request = URLRequest(url: Self.tokenURL)
         request.httpMethod = "POST"
