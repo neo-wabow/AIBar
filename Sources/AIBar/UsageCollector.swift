@@ -40,11 +40,19 @@ struct UsageCollector {
                 localFallback: localClaude,
                 currentAuthState: currentClaudeAuthState
             )
-            if statuslineAccounts.isEmpty {
+            let cloud = ClaudeCloudCollector(fileManager: fileManager, now: now).collect(localFallback: localClaude)
+            snapshot.errors.append(contentsOf: cloud.errors.map { "Claude: \($0)" })
+
+            if statuslineAccounts.isEmpty && cloud.accounts.isEmpty {
                 snapshot.claude = claudeCodePendingUsage(from: localClaude)
             } else {
                 snapshot.claude = localClaude
-                snapshot.claudeAccounts = statuslineAccounts
+                // Hybrid: CLI-active accounts keep their richer statusline data;
+                // configured cloud accounts (web/desktop) contribute live quota.
+                snapshot.claudeAccounts = mergeClaudeAccounts(
+                    statusline: statuslineAccounts,
+                    cloud: cloud.accounts
+                )
             }
         } catch {
             snapshot.errors.append("Claude: \(error.localizedDescription)")
@@ -189,6 +197,42 @@ struct UsageCollector {
             usage.note = usage.events == 0 ? "找不到最近的 Claude usage 訊息" : "Claude 未在本機紀錄官方 quota / 剩餘百分比"
         }
         return usage
+    }
+
+    /// Union of statusline (CLI-active, richer) and cloud (web/desktop, live quota)
+    /// accounts. When both describe the same account, statusline wins while it still
+    /// carries fresh official limits; otherwise the live cloud reading is used.
+    private func mergeClaudeAccounts(statusline: [ProviderUsage], cloud: [ProviderUsage]) -> [ProviderUsage] {
+        guard !cloud.isEmpty else { return statusline }
+
+        var order: [String] = []
+        var chosen: [String: ProviderUsage] = [:]
+
+        for account in statusline {
+            let key = mergeKey(account.accountName)
+            if chosen[key] == nil { order.append(key) }
+            chosen[key] = account
+        }
+
+        for account in cloud {
+            let key = mergeKey(account.accountName)
+            if let existing = chosen[key] {
+                if !existing.hasOfficialLimits {
+                    chosen[key] = account
+                }
+            } else {
+                order.append(key)
+                chosen[key] = account
+            }
+        }
+
+        return order.compactMap { chosen[$0] }
+    }
+
+    private func mergeKey(_ accountName: String?) -> String {
+        let raw = accountName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let trimmed = raw.drop(while: { $0 == "." || $0 == "-" })
+        return trimmed.isEmpty ? "default" : String(trimmed)
     }
 
     private func claudeCodePendingUsage(from localFallback: ProviderUsage) -> ProviderUsage {
