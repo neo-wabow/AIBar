@@ -124,8 +124,10 @@ enum ClaudeCloudError: Error {
             return "access token 已過期且無法刷新"
         case .refreshFailed(let detail):
             return "token 刷新失敗:\(detail)"
-        case .httpError(let code, let detail):
-            return "usage API 回應 HTTP \(code)\(detail.isEmpty ? "" : ":\(detail)")"
+        case .httpError(let code, _):
+            if code == 429 { return "官方 API 暫時限流,稍後自動重試" }
+            if code == 401 { return "授權失效,請重新登入該帳號" }
+            return "usage API 回應 HTTP \(code)"
         case .malformedResponse:
             return "usage API 回應格式無法解析"
         case .network(let detail):
@@ -144,6 +146,11 @@ struct ClaudeCloudClient {
     static let oauthBeta = "oauth-2025-04-20"
     static let anthropicVersion = "2023-06-01"
     static let refreshSkewSeconds: TimeInterval = 120
+    /// Minimum spacing between usage-endpoint calls per account. Normal ~60s
+    /// refreshes fetch fresh; this only coalesces bursts of calls within a few
+    /// seconds (which can trigger HTTP 429), and the cache doubles as a
+    /// last-known-value fallback when a fetch fails.
+    static let pollInterval: TimeInterval = 30
 
     /// The OAuth client id used for token refresh. Mirrors the CLI: an explicit
     /// `CLAUDE_CODE_OAUTH_CLIENT_ID` wins, otherwise the production client id.
@@ -158,16 +165,32 @@ struct ClaudeCloudClient {
     func fetchUsage(for config: ClaudeAccountConfig) throws -> ProviderUsage {
         let service = config.keychainServiceOverride ?? ClaudeKeychain.serviceName(configDir: config.configDir)
         let account = config.keychainAccountOverride ?? ClaudeKeychain.accountName()
+        let mergeKey = Self.statuslineName(configDir: config.configDir)
 
-        guard let blob = ClaudeKeychain.read(service: service, account: account) else {
-            throw ClaudeCloudError.noKeychainEntry
+        func build(_ json: [String: Any], capturedAt: Date, note: String?) -> ProviderUsage {
+            var usage = providerUsage(from: json, label: config.label, capturedAt: capturedAt, note: note)
+            usage.claudeMergeKey = mergeKey
+            return usage
         }
+
+        let cached = readCache(service: service)
+
+        // Serve a recent reading straight from cache — quota moves slowly and the
+        // endpoint rate-limits frequent polling.
+        if let cached, now.timeIntervalSince(cached.capturedAt) < Self.pollInterval {
+            return build(cached.json, capturedAt: cached.capturedAt, note: nil)
+        }
+
         guard
+            let blob = ClaudeKeychain.read(service: service, account: account),
             let root = (try? JSONSerialization.jsonObject(with: Data(blob.utf8))) as? [String: Any],
             var oauth = root["claudeAiOauth"] as? [String: Any],
             let accessToken0 = oauth["accessToken"] as? String
         else {
-            throw ClaudeCloudError.noClaudeLogin
+            if let cached {
+                return build(cached.json, capturedAt: cached.capturedAt, note: "找不到有效憑證,顯示上次同步值")
+            }
+            throw ClaudeCloudError.noKeychainEntry
         }
 
         var accessToken = accessToken0
@@ -175,16 +198,66 @@ struct ClaudeCloudClient {
         if let expiresAtMS = intValue(oauth["expiresAt"]) {
             let expiresAt = Date(timeIntervalSince1970: Double(expiresAtMS) / 1000.0)
             if expiresAt.timeIntervalSince(now) <= Self.refreshSkewSeconds {
-                accessToken = try refreshAndPersist(
-                    root: root, oauth: &oauth, service: service, account: account
-                )
+                do {
+                    accessToken = try refreshAndPersist(root: root, oauth: &oauth, service: service, account: account)
+                } catch {
+                    if let cached {
+                        return build(cached.json, capturedAt: cached.capturedAt, note: "token 刷新失敗,顯示上次同步值")
+                    }
+                    throw error
+                }
             }
         }
 
-        let usageJSON = try requestUsage(accessToken: accessToken)
-        var usage = providerUsage(from: usageJSON, label: config.label)
-        usage.claudeMergeKey = Self.statuslineName(configDir: config.configDir)
-        return usage
+        do {
+            let usageJSON = try requestUsage(accessToken: accessToken)
+            writeCache(service: service, json: usageJSON)
+            return build(usageJSON, capturedAt: now, note: nil)
+        } catch let error as ClaudeCloudError {
+            if let cached {
+                return build(cached.json, capturedAt: cached.capturedAt, note: staleNote(for: error))
+            }
+            throw error
+        }
+    }
+
+    private func staleNote(for error: ClaudeCloudError) -> String {
+        if case .httpError(429, _) = error {
+            return "官方 API 暫時限流,顯示上次同步值"
+        }
+        return "暫時無法更新,顯示上次同步值"
+    }
+
+    // MARK: - Usage cache (gentle polling + last-known fallback)
+
+    private var cacheDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".ai-usage", isDirectory: true)
+            .appendingPathComponent("claude-cloud-cache", isDirectory: true)
+    }
+
+    private func cacheURL(service: String) -> URL {
+        let safe = service.replacingOccurrences(of: #"[^A-Za-z0-9]+"#, with: "-", options: .regularExpression)
+        return cacheDirectory.appendingPathComponent("\(safe).json")
+    }
+
+    private func readCache(service: String) -> (capturedAt: Date, json: [String: Any])? {
+        guard
+            let data = try? Data(contentsOf: cacheURL(service: service)),
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let timestamp = doubleValue(object["captured_at"]),
+            let usage = object["usage"] as? [String: Any]
+        else {
+            return nil
+        }
+        return (Date(timeIntervalSince1970: timestamp), usage)
+    }
+
+    private func writeCache(service: String, json: [String: Any]) {
+        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        let payload: [String: Any] = ["captured_at": now.timeIntervalSince1970, "usage": json]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        try? data.write(to: cacheURL(service: service), options: .atomic)
     }
 
     /// The account name the statusline hook would derive for a config dir, used to
@@ -336,11 +409,11 @@ struct ClaudeCloudClient {
 
     // MARK: - Response mapping
 
-    private func providerUsage(from json: [String: Any], label: String) -> ProviderUsage {
+    private func providerUsage(from json: [String: Any], label: String, capturedAt: Date, note: String?) -> ProviderUsage {
         var usage = ProviderUsage(kind: .claude, accountName: label)
         usage.planType = "cloud"
-        usage.statuslineCapturedAt = now
-        usage.latestEventAt = now
+        usage.statuslineCapturedAt = capturedAt
+        usage.latestEventAt = capturedAt
         usage.events = 1
         usage.sourceFiles = 1
 
@@ -348,7 +421,9 @@ struct ClaudeCloudClient {
         usage.secondaryLimit = rateWindow(from: json["seven_day"] as? [String: Any], windowMinutes: 7 * 24 * 60)
 
         if usage.primaryLimit == nil, usage.secondaryLimit == nil {
-            usage.note = "此帳號目前無 quota 資料"
+            usage.note = note ?? "此帳號目前無 quota 資料"
+        } else {
+            usage.note = note
         }
         return usage
     }

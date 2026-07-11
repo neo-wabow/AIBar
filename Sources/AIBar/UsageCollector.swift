@@ -41,16 +41,27 @@ struct UsageCollector {
                 currentAuthState: currentClaudeAuthState
             )
             let cloud = ClaudeCloudCollector(fileManager: fileManager, now: now).collect(localFallback: localClaude)
-            snapshot.errors.append(contentsOf: cloud.errors.map { "Claude: \($0)" })
+            // Per-account cloud issues (rate limits, transient failures) surface as a
+            // note on that account's card rather than in the alarming error panel.
 
-            if statuslineAccounts.isEmpty && cloud.accounts.isEmpty {
+            // Only the default account and explicitly-configured accounts surface as
+            // cards. A non-default config dir that merely left a statusline file
+            // (e.g. logged in manually outside AIBar) stays in the "add account" list
+            // instead of appearing as an uninvited card.
+            let cloudKeys = Set(cloud.accounts.map { mergeKey($0.claudeMergeKey ?? $0.accountName) })
+            let visibleStatusline = statuslineAccounts.filter { account in
+                let key = mergeKey(account.claudeMergeKey ?? account.accountName)
+                return key == "default" || cloudKeys.contains(key)
+            }
+
+            if visibleStatusline.isEmpty && cloud.accounts.isEmpty {
                 snapshot.claude = claudeCodePendingUsage(from: localClaude)
             } else {
                 snapshot.claude = localClaude
                 // Hybrid: CLI-active accounts keep their richer statusline data;
                 // configured cloud accounts (web/desktop) contribute live quota.
                 snapshot.claudeAccounts = mergeClaudeAccounts(
-                    statusline: statuslineAccounts,
+                    statusline: visibleStatusline,
                     cloud: cloud.accounts
                 )
             }
