@@ -138,7 +138,7 @@ private struct MeterRow: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
-        .help(isExpired ? "這是最後同步值；下一次回覆後更新" : "")
+        .help(isExpired ? "此視窗已過重置時間,顯示的是重置前的最後數值;下次活動後更新" : "")
     }
 
     private var progressValue: Double {
@@ -152,7 +152,7 @@ private struct MeterRow: View {
     }
 
     private var resetText: String {
-        if isExpired { return "已過期" }
+        if isExpired { return "待更新" }
         guard remaining != nil else { return unavailableText }
         guard let resetAt else { return "重置 --" }
         return "重置 \(DateFormatters.reset.string(from: resetAt))"

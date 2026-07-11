@@ -330,6 +330,17 @@ struct UsageCollector {
             usage.note = authStaleReason
                 ?? claudeStatuslineNote(for: usage, hadRateLimits: rateLimits != nil)
                 ?? claudeStatuslineFreshnessNote(capturedAt: usage.statuslineCapturedAt)
+
+            // The default account's name is just "default"; show its real email
+            // (resolved from the profile endpoint, cached) while keeping its merge
+            // identity as "default" so it still passes the visibility filter.
+            if mergeKey(accountName) == "default" {
+                usage.claudeMergeKey = "default"
+                if let email = ClaudeCloudClient(now: now).cachedEmail(configDir: nil), !email.isEmpty {
+                    usage.accountName = email
+                }
+            }
+
             applyClaudeRateLimitErrorOverride(from: localFallback, to: &usage)
             accounts.append(usage)
         }

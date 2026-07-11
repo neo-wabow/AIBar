@@ -221,6 +221,47 @@ struct ClaudeCloudClient {
         }
     }
 
+    /// Resolves an account's email from /api/oauth/profile, cached for a long time
+    /// (email rarely changes). Used to give the default account a proper label
+    /// without adding meaningful API load. Returns nil if unavailable.
+    func cachedEmail(configDir: String?) -> String? {
+        let service = ClaudeKeychain.serviceName(configDir: configDir)
+        let url = cacheURL(service: "email-\(service)")
+
+        if
+            let data = try? Data(contentsOf: url),
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let timestamp = doubleValue(object["captured_at"]),
+            now.timeIntervalSince(Date(timeIntervalSince1970: timestamp)) < 3600
+        {
+            return object["email"] as? String
+        }
+
+        guard
+            let blob = ClaudeKeychain.read(service: service, account: ClaudeKeychain.accountName()),
+            let root = (try? JSONSerialization.jsonObject(with: Data(blob.utf8))) as? [String: Any],
+            let oauth = root["claudeAiOauth"] as? [String: Any],
+            let token = oauth["accessToken"] as? String,
+            let profile = fetchProfile(accessToken: token),
+            let email = profile.email
+        else {
+            // Fall back to a stale cached email if the lookup fails.
+            if
+                let data = try? Data(contentsOf: url),
+                let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            {
+                return object["email"] as? String
+            }
+            return nil
+        }
+
+        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: ["captured_at": now.timeIntervalSince1970, "email": email]) {
+            try? data.write(to: url, options: .atomic)
+        }
+        return email
+    }
+
     private func staleNote(for error: ClaudeCloudError) -> String {
         if case .httpError(429, _) = error {
             return "官方 API 暫時限流,顯示上次同步值"
