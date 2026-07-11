@@ -1,8 +1,10 @@
 # AIBar
 
-macOS 選單列工具，用來查看本機 Codex 與 Claude 用量。
+macOS 選單列工具，用來查看 Codex 與多個 Claude Code 帳號的剩餘額度。
 
-A macOS menu bar app for checking local Codex and Claude usage.
+A macOS menu bar app for checking local Codex usage and multiple Claude Code account quotas.
+
+支援多個 Claude Code 帳號監看，可在選單列與彈出視窗查看各帳號剩餘額度。
 
 ![AIBar 用量總覽](assets/usage-overview.png)
 
