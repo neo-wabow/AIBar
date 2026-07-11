@@ -30,6 +30,8 @@ final class AccountsWindowController: NSObject, NSWindowDelegate {
         window.title = "AIBar 帳號設定"
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
+        // The pane uses the popover's light visual language; match the titlebar.
+        window.appearance = NSAppearance(named: .aqua)
         window.setContentSize(NSSize(width: 460, height: 520))
         window.center()
         window.delegate = self

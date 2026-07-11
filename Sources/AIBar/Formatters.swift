@@ -61,4 +61,12 @@ enum DateFormatters {
         formatter.dateFormat = "M/d HH:mm"
         return formatter
     }()
+
+    /// Reset timestamp without the redundant date when it falls on today.
+    static func resetString(_ date: Date, now: Date = Date()) -> String {
+        if Calendar.current.isDate(date, inSameDayAs: now) {
+            return time.string(from: date)
+        }
+        return reset.string(from: date)
+    }
 }

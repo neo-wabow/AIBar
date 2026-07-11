@@ -154,7 +154,7 @@ private struct MeterRow: View {
         if isExpired { return "待更新" }
         guard remaining != nil else { return unavailableText }
         guard let resetAt else { return "重置 --" }
-        return "重置 \(DateFormatters.reset.string(from: resetAt))"
+        return "重置 \(DateFormatters.resetString(resetAt))"
     }
 
     private var displayColor: Color {
