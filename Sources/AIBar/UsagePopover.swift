@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 struct UsagePopover: View {
     @ObservedObject var store: UsageStore
     var onManageAccounts: () -> Void = {}
-    @State private var draggedKind: ProviderKind?
+    @State private var draggedKey: String?
 
     private let providerRowSpacing = UsageStore.providerRowSpacing
 
@@ -155,9 +155,7 @@ struct UsagePopover: View {
     }
 
     private var canReorderProviders: Bool {
-        store.preferences.mode == .all
-            && store.visibleProviders.contains { $0.kind == .codex }
-            && store.visibleProviders.contains { $0.kind == .claude }
+        store.visibleProviders.count >= 2
     }
 
     @ViewBuilder
@@ -172,14 +170,15 @@ struct UsagePopover: View {
         if canReorderProviders {
             card
                 .onDrag {
-                    draggedKind = provider.kind
-                    return NSItemProvider(object: provider.kind.rawValue as NSString)
+                    draggedKey = provider.orderKey
+                    return NSItemProvider(object: provider.orderKey as NSString)
                 }
                 .onDrop(
                     of: [UTType.text],
                     delegate: ProviderReorderDropDelegate(
-                        targetKind: provider.kind,
-                        draggedKind: $draggedKind,
+                        targetKey: provider.orderKey,
+                        draggedKey: $draggedKey,
+                        currentOrder: { store.visibleProviders.map(\.orderKey) },
                         preferences: store.preferences
                     )
                 )
@@ -191,18 +190,19 @@ struct UsagePopover: View {
 }
 
 private struct ProviderReorderDropDelegate: DropDelegate {
-    let targetKind: ProviderKind
-    @Binding var draggedKind: ProviderKind?
+    let targetKey: String
+    @Binding var draggedKey: String?
+    let currentOrder: () -> [String]
     let preferences: DisplayPreferences
 
     func validateDrop(info: DropInfo) -> Bool {
-        guard preferences.mode == .all, let draggedKind else { return false }
-        return draggedKind != targetKind
+        guard let draggedKey else { return false }
+        return draggedKey != targetKey
     }
 
     func dropEntered(info: DropInfo) {
-        guard preferences.mode == .all, let draggedKind, draggedKind != targetKind else { return }
-        preferences.move(draggedKind, before: targetKind)
+        guard let draggedKey, draggedKey != targetKey else { return }
+        preferences.move(draggedKey, before: targetKey, in: currentOrder())
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
@@ -210,7 +210,7 @@ private struct ProviderReorderDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        draggedKind = nil
+        draggedKey = nil
         return true
     }
 }

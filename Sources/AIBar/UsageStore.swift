@@ -40,7 +40,7 @@ final class UsageStore: ObservableObject {
     }
 
     var menuBarLines: [MenuBarStatusLine] {
-        preferences.visibleKinds.map { kind in
+        visibleKinds.map { kind in
             guard let remaining = menuBarRemainingValue(for: kind) else {
                 return MenuBarStatusLine(symbolName: kind.symbol, name: kind.title, code: kind.menuBarCode, value: "--")
             }
@@ -48,8 +48,17 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// Kinds present in the popover, in their displayed order (first occurrence).
+    private var visibleKinds: [ProviderKind] {
+        var kinds: [ProviderKind] = []
+        for provider in visibleProviders where !kinds.contains(provider.kind) {
+            kinds.append(provider.kind)
+        }
+        return kinds
+    }
+
     var visibleProviders: [ProviderUsage] {
-        snapshot.providers(orderedBy: preferences.order, mode: preferences.mode)
+        snapshot.orderedProviders(customOrder: preferences.providerOrder, mode: preferences.mode)
     }
 
     // Provider card metrics, shared with UsagePopover so the window height and the
@@ -121,6 +130,10 @@ final class UsageStore: ObservableObject {
     }
 
     private func menuBarRemainingValue(for kind: ProviderKind) -> Double? {
+        // Deliberate: with multiple accounts of a kind, the menu bar shows the
+        // LOWEST remaining (the worst account). The menu bar is a glanceable
+        // warning surface — surfacing whichever account is closest to running out
+        // is what matters at a glance; per-account detail lives in the popover.
         snapshot.providers
             .filter { $0.kind == kind }
             .compactMap(menuBarRemainingValue)

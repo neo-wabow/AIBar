@@ -139,6 +139,15 @@ struct ProviderUsage: Identifiable, Equatable {
     var hasOfficialLimits: Bool {
         primaryLimit != nil || secondaryLimit != nil
     }
+
+    /// Stable identity for persisting the user's custom card order. Uses the merge
+    /// key (config-dir-derived) so it survives the display label changing.
+    var orderKey: String {
+        switch kind {
+        case .codex: return "codex"
+        case .claude: return "claude:\(claudeMergeKey ?? accountName ?? "default")"
+        }
+    }
 }
 
 struct UsageSnapshot: Equatable {
