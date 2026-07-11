@@ -46,7 +46,17 @@ dist/AIBar.app
 
 Codex 會在本機 session logs 暴露目前 rate-limit 百分比。2026-07 起 Codex desktop 入口併入 ChatGPT desktop app，但官方 transcript 位置仍是 `$CODEX_HOME/sessions`；若使用者設定了自訂 `CODEX_HOME`，AIBar 會優先讀取該目錄並 fallback 到 `~/.codex/sessions`。
 
+Codex quota 只會在本機 `token_count` 記錄更新後刷新；這些記錄通常在 Codex / ChatGPT 有模型回覆後才寫入。若 5 小時視窗已過重置時間但沒有新的 Codex 活動，AIBar 會保留最後一次百分比並標示待更新；Reload 只會重讀本機檔案，不會主動向雲端刷新 quota。
+
 Claude 本機 logs 只包含 token usage，不包含官方方案額度或重置百分比。若要準確顯示 Claude 剩餘額度，需要安裝 statusline hook。
+
+## 更新與狀態文字
+
+- AIBar 每 60 秒自動重讀一次本機資料；打開彈出視窗或按 Reload 會立即重讀一次。
+- Reload 只會重讀本機檔案，不會主動向 Codex / Claude 雲端刷新 quota；如果來源尚未寫出新快照，畫面會維持最後一次可信數字。
+- `待更新` 表示重置時間已過，但本機來源尚未產生新的 rate-limit 記錄。
+- `未同步` 表示尚未取得官方 quota 快照，AIBar 不會用本機 token usage 推估百分比。
+- `顯示上次同步值` 表示官方查詢或憑證刷新暫時失敗，AIBar 會保留最後一次成功同步的值並在卡片標示原因。
 
 ### Claude 額度信任邊界
 
