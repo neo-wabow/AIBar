@@ -4,7 +4,9 @@ macOS 選單列工具，用來查看本機 Codex 與 Claude 用量。
 
 A macOS menu bar app for checking local Codex and Claude usage.
 
-![AIBar screenshot](assets/screenshot.png)
+![AIBar 用量總覽](assets/usage-overview.png)
+
+![AIBar 帳號設定](assets/account-settings.png)
 
 ## 顯示設定
 
