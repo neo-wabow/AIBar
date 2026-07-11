@@ -4,20 +4,19 @@ struct ProviderCard: View {
     let usage: ProviderUsage
     let accent: Color
     let showsDragHandle: Bool
+    /// Show the account name/email as the title (only when it helps disambiguate,
+    /// i.e. more than one account of this provider). Otherwise the provider name.
+    var showsAccountName: Bool = false
 
     private var primaryRemaining: Double? { usage.primaryLimit?.remainingPercent }
     private var secondaryRemaining: Double? { usage.secondaryLimit?.remainingPercent }
     private var displayedRemaining: Double? { primaryRemaining ?? secondaryRemaining }
 
-    /// A named Claude account (not the bare default) shows the account name/email
-    /// instead of the provider name — the icon already signals the provider.
-    private var isNamedAccount: Bool { usage.displayTitle != usage.kind.title }
-
     private var cardTitle: String {
-        guard isNamedAccount, let accountName = usage.accountName, !accountName.isEmpty else {
-            return usage.displayTitle
+        if showsAccountName, let accountName = usage.accountName, !accountName.isEmpty, accountName != "default" {
+            return accountName
         }
-        return accountName
+        return usage.kind.title
     }
 
     var body: some View {

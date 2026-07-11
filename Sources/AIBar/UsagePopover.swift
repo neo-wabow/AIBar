@@ -150,6 +150,10 @@ struct UsagePopover: View {
         )
     }
 
+    private var claudeAccountCount: Int {
+        store.visibleProviders.filter { $0.kind == .claude }.count
+    }
+
     private var canReorderProviders: Bool {
         store.preferences.mode == .all
             && store.visibleProviders.contains { $0.kind == .codex }
@@ -161,7 +165,8 @@ struct UsagePopover: View {
         let card = ProviderCard(
             usage: provider,
             accent: provider.kind == .codex ? AppColors.codexAccent : AppColors.claudeAccent,
-            showsDragHandle: canReorderProviders
+            showsDragHandle: canReorderProviders,
+            showsAccountName: provider.kind == .claude && claudeAccountCount >= 2
         )
 
         if canReorderProviders {
