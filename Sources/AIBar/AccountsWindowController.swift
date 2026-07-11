@@ -30,7 +30,7 @@ final class AccountsWindowController: NSObject, NSWindowDelegate {
         window.title = "AIBar 帳號設定"
         window.styleMask = [.titled, .closable]
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 420, height: 460))
+        window.setContentSize(NSSize(width: 460, height: 520))
         window.center()
         window.delegate = self
         self.window = window

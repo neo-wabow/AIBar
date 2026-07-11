@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 /// Settings pane for choosing which Claude accounts AIBar monitors. Opened from
-/// the popover's "+" button. Lists monitored accounts (removable) and, under a
-/// "+", the accounts discovered on this machine plus a folder picker for config
-/// dirs in non-standard locations.
+/// the popover's "+" button. Lists monitored accounts (removable) and, below,
+/// the accounts discovered on this machine plus a one-click login and a folder
+/// picker. Shares the popover's light visual language for a consistent feel.
 struct AccountsSettingsView: View {
     @ObservedObject var store: ClaudeAccountsStore
     var onChange: () -> Void
@@ -16,25 +16,35 @@ struct AccountsSettingsView: View {
     @State private var pendingLoginConfigDir: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Claude 帳號")
-                .font(.system(size: 15, weight: .semibold))
+        ZStack {
+            LinearGradient(
+                colors: [AppColors.backgroundTop, AppColors.backgroundBottom],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
 
-            monitoredSection
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Claude 帳號")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(AppColors.ink)
 
-            Divider()
+                section(header: "監看中") { monitoredCard }
 
-            addSection
+                section(header: "加入其他帳號") { addCard }
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            Text("額外帳號需先在其 config dir 用 CLI 登入過一次,AIBar 才讀得到官方額度。")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                Text("額外帳號需在其設定資料夾用 CLI 登入過一次,AIBar 才讀得到官方額度。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppColors.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(18)
-        .frame(minWidth: 420, minHeight: 440, alignment: .topLeading)
+        .environment(\.colorScheme, .light)
+        .frame(minWidth: 440, minHeight: 480)
         .onAppear(perform: scan)
         .onReceive(NotificationCenter.default.publisher(for: .aibarAccountsRescan)) { _ in
             scan()
@@ -42,61 +52,177 @@ struct AccountsSettingsView: View {
         }
     }
 
-    private var monitoredSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("監看中")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
+    // MARK: - Sections
 
+    private var monitoredCard: some View {
+        VStack(spacing: 0) {
             if defaultAccount == nil && configuredExtras.isEmpty {
-                Text(isScanning ? "掃描已登入帳號…" : "找不到已登入的 Claude 帳號。")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                emptyRow(isScanning ? "掃描已登入帳號…" : "找不到已登入的 Claude 帳號。")
             }
 
-            // The default CLI account is always monitored via statusline.
             if let defaultAccount {
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(defaultAccount.suggestedLabel).font(.system(size: 13, weight: .medium))
-                        Text(subtitle(for: defaultAccount))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text("自動")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.secondary.opacity(0.15), in: Capsule())
+                accountRow(
+                    title: defaultAccount.suggestedLabel,
+                    subtitle: metadata(subscription: defaultAccount.subscriptionType, prefix: "預設"),
+                    pathTooltip: "預設 ~/.claude"
+                ) {
+                    badge("自動")
                 }
-                .padding(.vertical, 3)
             }
 
-            ForEach(configuredExtras) { entry in
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(entry.label).font(.system(size: 13, weight: .medium))
-                        Text(entry.configDir ?? "預設 ~/.claude")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button {
+            ForEach(Array(configuredExtras.enumerated()), id: \.element.id) { index, entry in
+                if defaultAccount != nil || index > 0 {
+                    rowDivider
+                }
+                accountRow(
+                    title: entry.label,
+                    subtitle: metadata(subscription: subscription(forConfigDir: entry.configDir), prefix: nil),
+                    pathTooltip: entry.configDir
+                ) {
+                    iconButton(systemName: "xmark.circle.fill", tint: AppColors.tertiary, help: "移除") {
                         store.remove(entry)
                         onChange()
                         scan()
-                    } label: {
-                        Image(systemName: "minus.circle.fill").foregroundStyle(.red)
                     }
-                    .buttonStyle(.plain)
-                    .help("移除")
                 }
-                .padding(.vertical, 3)
             }
         }
     }
+
+    private var addCard: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(addableAccounts.enumerated()), id: \.element.id) { index, account in
+                if index > 0 { rowDivider }
+                accountRow(
+                    title: account.suggestedLabel,
+                    subtitle: metadata(subscription: account.subscriptionType, prefix: nil),
+                    pathTooltip: account.configDir
+                ) {
+                    iconButton(systemName: "plus.circle.fill", tint: AppColors.claudeAccent, help: "加入監看") {
+                        add(account)
+                    }
+                }
+            }
+
+            if addableAccounts.isEmpty {
+                emptyRow(isScanning ? "掃描中…" : "沒有其他已登入的帳號。")
+            }
+
+            rowDivider
+
+            HStack(spacing: 10) {
+                Button(action: loginNewAccount) {
+                    Label("登入新帳號", systemImage: "person.crop.circle.badge.plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppColors.claudeAccent)
+                .controlSize(.small)
+
+                Button("選擇資料夾…", action: pickFolder)
+                    .buttonStyle(.link)
+                    .controlSize(.small)
+
+                Spacer()
+
+                if isScanning {
+                    ProgressView().controlSize(.small)
+                } else {
+                    iconButton(systemName: "arrow.clockwise", tint: AppColors.secondary, help: "重新掃描", action: scan)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+    }
+
+    // MARK: - Reusable pieces
+
+    private func section<Content: View>(header: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(header)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(AppColors.secondary)
+            content()
+                .background(AppColors.panel, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(AppColors.border.opacity(0.6), lineWidth: 1)
+                )
+        }
+    }
+
+    private func accountRow<Trailing: View>(
+        title: String,
+        subtitle: String,
+        pathTooltip: String?,
+        @ViewBuilder trailing: () -> Trailing
+    ) -> some View {
+        HStack(spacing: 11) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(AppColors.claudeAccent)
+                .frame(width: 30, height: 30)
+                .background(AppColors.claudeAccent.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(AppColors.ink)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(AppColors.tertiary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            trailing()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .help(pathTooltip ?? "")
+    }
+
+    private func emptyRow(_ text: String) -> some View {
+        HStack {
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(AppColors.tertiary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+    }
+
+    private var rowDivider: some View {
+        Rectangle()
+            .fill(AppColors.border.opacity(0.5))
+            .frame(height: 1)
+            .padding(.leading, 53)
+    }
+
+    private func badge(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(AppColors.claudeAccent)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(AppColors.claudeAccent.opacity(0.12), in: Capsule())
+    }
+
+    private func iconButton(systemName: String, tint: Color, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(tint)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    // MARK: - Derived data
 
     /// The default `~/.claude` account, monitored automatically via statusline.
     private var defaultAccount: DiscoveredClaudeAccount? {
@@ -105,76 +231,28 @@ struct AccountsSettingsView: View {
 
     /// Extra (non-default) accounts the user has explicitly added.
     private var configuredExtras: [ClaudeAccountEntry] {
-        store.accounts.filter { ($0.configDir?.isEmpty == false) }
-    }
-
-    private var addSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text("加入帳號")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                if isScanning {
-                    ProgressView().controlSize(.small)
-                }
-                Spacer()
-                Button {
-                    scan()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .controlSize(.small)
-                .help("重新掃描")
-                Button("登入新帳號…", action: loginNewAccount)
-                    .controlSize(.small)
-                Button("選擇資料夾…", action: pickFolder)
-                    .controlSize(.small)
-            }
-
-            if addableAccounts.isEmpty && !isScanning {
-                Text("沒有偵測到其他已登入的帳號。用「選擇資料夾…」加入非慣例位置的 config dir。")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
-
-            ForEach(addableAccounts) { (account: DiscoveredClaudeAccount) in
-                HStack(spacing: 8) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(account.suggestedLabel).font(.system(size: 13, weight: .medium))
-                        Text(subtitle(for: account))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button {
-                        add(account)
-                    } label: {
-                        Image(systemName: "plus.circle.fill").foregroundStyle(Color.accentColor)
-                    }
-                    .buttonStyle(.plain)
-                    .help("加入")
-                }
-                .padding(.vertical, 3)
-            }
-        }
+        store.accounts.filter { $0.configDir?.isEmpty == false }
     }
 
     private var addableAccounts: [DiscoveredClaudeAccount] {
         discovered.filter { account in
-            // Exclude the default account (already monitored automatically) and any
-            // account the user has already added.
             account.configDir != nil
                 && !store.accounts.contains { $0.id == ClaudeAccountEntry(label: "", configDir: account.configDir).id }
         }
     }
 
-    private func subtitle(for account: DiscoveredClaudeAccount) -> String {
-        let dir = account.configDir ?? "預設 ~/.claude"
-        if let sub = account.subscriptionType, !sub.isEmpty {
-            return "\(dir) · \(sub)"
-        }
-        return dir
+    private func subscription(forConfigDir configDir: String?) -> String? {
+        discovered.first { $0.configDir == configDir }?.subscriptionType
     }
+
+    private func metadata(subscription: String?, prefix: String?) -> String {
+        [prefix, subscription?.isEmpty == false ? subscription : nil]
+            .compactMap { $0 }
+            .joined(separator: " · ")
+            .ifEmpty("已加入")
+    }
+
+    // MARK: - Actions
 
     private func scan() {
         isScanning = true
@@ -200,14 +278,7 @@ struct AccountsSettingsView: View {
     }
 
     private func add(_ account: DiscoveredClaudeAccount) {
-        store.add(
-            ClaudeAccountEntry(
-                label: account.suggestedLabel,
-                configDir: account.configDir,
-                keychainService: nil,
-                account: nil
-            )
-        )
+        store.add(ClaudeAccountEntry(label: account.suggestedLabel, configDir: account.configDir))
         onChange()
     }
 
@@ -274,5 +345,11 @@ struct AccountsSettingsView: View {
         store.add(ClaudeAccountEntry(label: label.isEmpty ? "account" : label, configDir: path))
         onChange()
         scan()
+    }
+}
+
+private extension String {
+    func ifEmpty(_ fallback: String) -> String {
+        isEmpty ? fallback : self
     }
 }

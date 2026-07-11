@@ -54,7 +54,7 @@ final class UsageStore: ObservableObject {
 
     // Provider card metrics, shared with UsagePopover so the window height and the
     // scrollable list stay in sync as the number of accounts grows.
-    static let providerRowHeight: CGFloat = 76
+    static let providerRowHeight: CGFloat = 96
     static let providerRowSpacing: CGFloat = 8
 
     /// Height of the (possibly scrolling) provider list: shows up to a cap of rows,
