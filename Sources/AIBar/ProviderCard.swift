@@ -7,6 +7,7 @@ struct ProviderCard: View {
     /// Show the account name/email as the title (only when it helps disambiguate,
     /// i.e. more than one account of this provider). Otherwise the provider name.
     var showsAccountName: Bool = false
+    @State private var isShowingNote = false
 
     private var primaryRemaining: Double? { usage.primaryLimit?.remainingPercent }
     private var secondaryRemaining: Double? { usage.secondaryLimit?.remainingPercent }
@@ -68,10 +69,24 @@ struct ProviderCard: View {
                 .help(usage.displayTitle)
 
             if let note = usage.note {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(AppColors.tertiary)
-                    .help(note)
+                Button {
+                    isShowingNote.toggle()
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(AppColors.tertiary)
+                }
+                .buttonStyle(.plain)
+                .help("點擊查看狀態說明")
+                .accessibilityLabel("狀態說明")
+                .popover(isPresented: $isShowingNote, arrowEdge: .top) {
+                    Text(note)
+                        .font(.system(size: 12))
+                        .foregroundStyle(AppColors.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 220, alignment: .leading)
+                        .padding(12)
+                }
             }
 
             Spacer(minLength: 4)

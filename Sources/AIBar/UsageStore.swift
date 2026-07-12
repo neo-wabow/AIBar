@@ -40,21 +40,25 @@ final class UsageStore: ObservableObject {
     }
 
     var menuBarLines: [MenuBarStatusLine] {
-        visibleKinds.map { kind in
-            guard let remaining = menuBarRemainingValue(for: kind) else {
-                return MenuBarStatusLine(symbolName: kind.symbol, name: kind.title, code: kind.menuBarCode, value: "--")
-            }
-            return MenuBarStatusLine(symbolName: kind.symbol, name: kind.title, code: kind.menuBarCode, value: "\(Int(remaining.rounded()))%")
-        }
-    }
+        let providers = Array(visibleProviders.prefix(2))
+        let codes = MenuBarCodeResolver.resolve(for: providers)
 
-    /// Kinds present in the popover, in their displayed order (first occurrence).
-    private var visibleKinds: [ProviderKind] {
-        var kinds: [ProviderKind] = []
-        for provider in visibleProviders where !kinds.contains(provider.kind) {
-            kinds.append(provider.kind)
+        return zip(providers, codes).map { provider, code in
+            guard let remaining = menuBarRemainingValue(for: provider) else {
+                return MenuBarStatusLine(
+                    symbolName: provider.kind.symbol,
+                    name: provider.displayTitle,
+                    code: code,
+                    value: "--"
+                )
+            }
+            return MenuBarStatusLine(
+                symbolName: provider.kind.symbol,
+                name: provider.displayTitle,
+                code: code,
+                value: "\(Int(remaining.rounded()))%"
+            )
         }
-        return kinds
     }
 
     var visibleProviders: [ProviderUsage] {
@@ -127,17 +131,6 @@ final class UsageStore: ObservableObject {
 
     private func menuBarRemainingValues() -> [Double] {
         visibleProviders.compactMap(menuBarRemainingValue)
-    }
-
-    private func menuBarRemainingValue(for kind: ProviderKind) -> Double? {
-        // Deliberate: with multiple accounts of a kind, the menu bar shows the
-        // LOWEST remaining (the worst account). The menu bar is a glanceable
-        // warning surface — surfacing whichever account is closest to running out
-        // is what matters at a glance; per-account detail lives in the popover.
-        snapshot.providers
-            .filter { $0.kind == kind }
-            .compactMap(menuBarRemainingValue)
-            .min()
     }
 
     private func menuBarRemainingValue(for usage: ProviderUsage) -> Double? {

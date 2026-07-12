@@ -114,6 +114,37 @@ struct ProviderUsage: Identifiable, Equatable {
         return "\(kind.title) \(accountName)"
     }
 
+    var menuBarCode: String {
+        guard kind == .claude, let accountName = displayAccountName else {
+            return kind.menuBarCode
+        }
+
+        let localPart = accountName.split(separator: "@", maxSplits: 1).first.map(String.init) ?? accountName
+        let shortName = String(localPart.prefix(6))
+        return shortName.isEmpty ? kind.menuBarCode : shortName
+    }
+
+    var menuBarDisambiguationParts: (nameInitial: String, domain: String)? {
+        guard kind == .claude, let accountName = displayAccountName else { return nil }
+
+        let parts = accountName.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+
+        let localPart = String(parts[0])
+        let domain = String(parts[1]).lowercased()
+        guard
+            !localPart.isEmpty,
+            !domain.isEmpty,
+            let initial = localPart.unicodeScalars.first(where: {
+                $0.value < 128 && CharacterSet.alphanumerics.contains($0)
+            })
+        else {
+            return nil
+        }
+
+        return (String(initial), domain)
+    }
+
     private var displayAccountName: String? {
         guard
             let rawAccountName = accountName?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -147,6 +178,55 @@ struct ProviderUsage: Identifiable, Equatable {
         case .codex: return "codex"
         case .claude: return "claude:\(claudeMergeKey ?? accountName ?? "default")"
         }
+    }
+}
+
+enum MenuBarCodeResolver {
+    private static let maximumCodeLength = 6
+
+    static func resolve(for providers: [ProviderUsage]) -> [String] {
+        var codes = providers.map(\.menuBarCode)
+        guard
+            providers.count == 2,
+            codes[0].caseInsensitiveCompare(codes[1]) == .orderedSame
+        else {
+            return codes
+        }
+
+        if
+            providers.allSatisfy({ $0.kind == .claude }),
+            let first = providers[0].menuBarDisambiguationParts,
+            let second = providers[1].menuBarDisambiguationParts,
+            let domainCodes = distinctDomainCodes(first: first, second: second)
+        {
+            return domainCodes
+        }
+
+        var claudeNumber = 0
+        for index in providers.indices where providers[index].kind == .claude {
+            claudeNumber += 1
+            codes[index] = "CL\(claudeNumber)"
+        }
+        return codes
+    }
+
+    private static func distinctDomainCodes(
+        first: (nameInitial: String, domain: String),
+        second: (nameInitial: String, domain: String)
+    ) -> [String]? {
+        let fixedLength = max(first.nameInitial.count, second.nameInitial.count) + 1
+        let maximumDomainLength = maximumCodeLength - fixedLength
+        guard maximumDomainLength >= 1 else { return nil }
+
+        for length in 1...maximumDomainLength {
+            let firstCode = "\(first.nameInitial)@\(first.domain.prefix(length))"
+            let secondCode = "\(second.nameInitial)@\(second.domain.prefix(length))"
+            if firstCode.caseInsensitiveCompare(secondCode) != .orderedSame {
+                return [firstCode, secondCode]
+            }
+        }
+
+        return nil
     }
 }
 

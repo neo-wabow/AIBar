@@ -124,7 +124,10 @@ struct UsageCollector {
                     usage.latestEventAt = timestamp
                 }
 
-                if let rateLimits = payload["rate_limits"] as? [String: Any] {
+                if
+                    let rateLimits = payload["rate_limits"] as? [String: Any],
+                    isMainCodexRateLimit(rateLimits)
+                {
                     let primaryLimit = rateWindow(from: rateLimits["primary"] as? [String: Any])
                     let secondaryLimit = rateWindow(from: rateLimits["secondary"] as? [String: Any])
                     if primaryLimit != nil || secondaryLimit != nil {
@@ -142,6 +145,18 @@ struct UsageCollector {
         }
 
         return usage
+    }
+
+    /// Codex can emit a separate rate-limit bucket for an individual model
+    /// (for example `codex_bengalfox` for GPT-5.3-Codex-Spark). The Codex card
+    /// represents the account-wide quota, so a newer model-specific event must
+    /// not replace the main `codex` window and make the card appear to be 100%.
+    /// Older records did not always include `limit_id`, so keep accepting those.
+    private func isMainCodexRateLimit(_ rateLimits: [String: Any]) -> Bool {
+        guard let limitID = stringValue(rateLimits["limit_id"]) else {
+            return true
+        }
+        return limitID == "codex"
     }
 
     private func collectClaudeLocal(windows: TimeWindows, currentAuthState: ClaudeAuthState?) throws -> ProviderUsage {
