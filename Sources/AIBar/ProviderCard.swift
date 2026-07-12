@@ -82,7 +82,7 @@ struct ProviderCard: View {
                 .popover(isPresented: $isShowingNote, arrowEdge: .top) {
                     Text(note)
                         .font(.system(size: 12))
-                        .foregroundStyle(AppColors.ink)
+                        .foregroundStyle(.white.opacity(0.94))
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(width: 220, alignment: .leading)
                         .padding(12)
