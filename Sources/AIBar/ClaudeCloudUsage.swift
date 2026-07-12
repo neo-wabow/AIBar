@@ -473,7 +473,15 @@ struct ClaudeCloudClient {
         guard let dictionary else { return nil }
         let used = doubleValue(dictionary["utilization"])
         let resetsAt = parseISODate(dictionary["resets_at"] as? String)
-        if let resetsAt, resetsAt <= now { return nil }
+        let isExpired = resetsAt.map { $0 <= now } ?? false
+
+        if isExpired {
+            // Window already reset; keep the last-known value visible but dimmed as
+            // "待更新" (matching Codex) instead of dropping it to a bare "--".
+            guard used != nil else { return nil }
+            return RateWindow(usedPercent: used, windowMinutes: windowMinutes, resetsAt: resetsAt, isExpired: true)
+        }
+
         guard used != nil || resetsAt != nil else { return nil }
         return RateWindow(usedPercent: used, windowMinutes: windowMinutes, resetsAt: resetsAt)
     }

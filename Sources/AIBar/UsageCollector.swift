@@ -340,15 +340,27 @@ struct UsageCollector {
         for account in cloud {
             let key = mergeKey(account.claudeMergeKey ?? account.accountName)
             if var existing = chosen[key] {
-                if existing.hasOfficialLimits {
-                    // Statusline data is richer, but prefer the configured label
-                    // (e.g. the account email) over the config-dir-derived name.
+                if existing.hasOfficialLimits && !existing.hasExpiredOfficialWindow {
+                    // Statusline is fresh — it reflects CLI activity in real time —
+                    // so keep it, but prefer the configured label (e.g. the account
+                    // email) over the config-dir-derived name.
                     if let label = account.accountName, !label.isEmpty {
                         existing.accountName = label
                         chosen[key] = existing
                     }
                 } else {
-                    chosen[key] = account
+                    // Statusline is missing official limits or its window already
+                    // expired (idle — the CLI is echoing stale numbers). The cloud
+                    // reading is live, so use it; keep the friendlier resolved label
+                    // (e.g. the account email) when the cloud entry lacks one.
+                    var live = account
+                    let cloudLabel = live.accountName?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if cloudLabel == nil || cloudLabel!.isEmpty || cloudLabel == "default" {
+                        if let slName = existing.accountName, !slName.isEmpty, slName != "default" {
+                            live.accountName = slName
+                        }
+                    }
+                    chosen[key] = live
                 }
             } else {
                 order.append(key)
@@ -767,10 +779,21 @@ struct UsageCollector {
         guard let dictionary else { return nil }
         let reset = doubleValue(dictionary["resets_at"])
         let resetsAt = (reset ?? 0) > 0 ? Date(timeIntervalSince1970: reset ?? 0) : nil
-        if let resetsAt, resetsAt <= now {
-            return nil
-        }
         let usedPercent = doubleValue(dictionary["used_percentage"])
+        let isExpired = resetsAt.map { $0 <= now } ?? false
+
+        if isExpired {
+            // The window already reset; the CLI is echoing the pre-reset numbers
+            // until the next activity. Keep the last-known value visible but dimmed
+            // as "待更新" (matching Codex) instead of dropping it to a bare "--".
+            guard usedPercent != nil else { return nil }
+            return RateWindow(
+                usedPercent: usedPercent,
+                windowMinutes: windowMinutes,
+                resetsAt: resetsAt,
+                isExpired: true
+            )
+        }
 
         guard usedPercent != nil || resetsAt != nil else { return nil }
         return RateWindow(

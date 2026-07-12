@@ -171,6 +171,12 @@ struct ProviderUsage: Identifiable, Equatable {
         primaryLimit != nil || secondaryLimit != nil
     }
 
+    /// True when any official window is present but has already passed its reset
+    /// time — i.e. the data is stale and only echoing pre-reset numbers.
+    var hasExpiredOfficialWindow: Bool {
+        primaryLimit?.isExpired == true || secondaryLimit?.isExpired == true
+    }
+
     /// Stable identity for persisting the user's custom card order. Uses the merge
     /// key (config-dir-derived) so it survives the display label changing.
     var orderKey: String {

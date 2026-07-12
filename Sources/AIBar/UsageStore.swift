@@ -154,6 +154,11 @@ final class UsageStore: ObservableObject {
     }
 
     private func menuBarRemainingValue(for usage: ProviderUsage) -> Double? {
-        usage.primaryLimit?.remainingPercent ?? usage.secondaryLimit?.remainingPercent
+        // Prefer a live window: an expired window only carries a stale pre-reset
+        // value ("待更新"), which shouldn't drive the menu bar's lowest-% readout.
+        // Fall back to an expired value only when no live window is available.
+        if let primary = usage.primaryLimit, !primary.isExpired { return primary.remainingPercent }
+        if let secondary = usage.secondaryLimit, !secondary.isExpired { return secondary.remainingPercent }
+        return usage.primaryLimit?.remainingPercent ?? usage.secondaryLimit?.remainingPercent
     }
 }

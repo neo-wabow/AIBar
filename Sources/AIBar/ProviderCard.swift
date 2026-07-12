@@ -11,7 +11,13 @@ struct ProviderCard: View {
 
     private var primaryRemaining: Double? { usage.primaryLimit?.remainingPercent }
     private var secondaryRemaining: Double? { usage.secondaryLimit?.remainingPercent }
-    private var displayedRemaining: Double? { primaryRemaining ?? secondaryRemaining }
+    /// Drives the card's background/border tint. Prefer a live window; an expired
+    /// window carries a stale pre-reset value that shouldn't recolour the card.
+    private var displayedRemaining: Double? {
+        if let primary = usage.primaryLimit, !primary.isExpired { return primary.remainingPercent }
+        if let secondary = usage.secondaryLimit, !secondary.isExpired { return secondary.remainingPercent }
+        return primaryRemaining ?? secondaryRemaining
+    }
 
     private var cardTitle: String {
         if showsAccountName, let accountName = usage.accountName, !accountName.isEmpty, accountName != "default" {
