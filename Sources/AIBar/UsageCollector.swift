@@ -1,5 +1,13 @@
 import Foundation
 
+private struct CodexRateLimitSnapshot {
+    let timestamp: Date
+    let primaryLimit: RateWindow?
+    let secondaryLimit: RateWindow?
+    let planType: String?
+    let hasExpiredWindow: Bool
+}
+
 struct UsageCollector {
     private let fileManager: FileManager
     private let calendar: Calendar
@@ -93,7 +101,8 @@ struct UsageCollector {
         var usage = ProviderUsage(kind: .codex)
         let files = recentJSONLFiles(under: root, modifiedAfter: windows.weekStart)
         usage.sourceFiles = files.count
-        var latestLimitEventAt: Date?
+        var latestLimitSnapshot: CodexRateLimitSnapshot?
+        var observedPlanTypes = Set<String>()
 
         for file in files {
             for line in readLines(from: file) where line.contains("\"token_count\"") {
@@ -130,20 +139,46 @@ struct UsageCollector {
                 {
                     let primaryLimit = rateWindow(from: rateLimits["primary"] as? [String: Any])
                     let secondaryLimit = rateWindow(from: rateLimits["secondary"] as? [String: Any])
-                    if primaryLimit != nil || secondaryLimit != nil {
-                        if latestLimitEventAt == nil || timestamp > latestLimitEventAt! {
-                            latestLimitEventAt = timestamp
-                            usage.primaryLimit = primaryLimit
-                            usage.secondaryLimit = secondaryLimit
-                            usage.planType = rateLimits["plan_type"] as? String
-                        }
-                    } else if latestLimitEventAt == nil {
-                        usage.planType = rateLimits["plan_type"] as? String
+                    let planType = stringValue(rateLimits["plan_type"])
+                    if let planType {
+                        observedPlanTypes.insert(planType)
+                    }
+
+                    let candidate = CodexRateLimitSnapshot(
+                        timestamp: timestamp,
+                        primaryLimit: primaryLimit,
+                        secondaryLimit: secondaryLimit,
+                        planType: planType,
+                        hasExpiredWindow: hasExpiredCodexRateWindow(rateLimits)
+                    )
+                    if latestLimitSnapshot == nil || timestamp > latestLimitSnapshot!.timestamp {
+                        latestLimitSnapshot = candidate
                     }
                 }
             }
         }
 
+        guard let latestLimitSnapshot else {
+            usage.note = "尚未收到 Codex 本機額度快照"
+            return usage
+        }
+
+        if observedPlanTypes.count > 1 {
+            usage.note = "偵測到不同 Codex 方案的本機快照（\(observedPlanTypes.sorted().joined(separator: "、"))）；無法確認目前登入帳號，已停止顯示額度"
+            return usage
+        }
+
+        if latestLimitSnapshot.hasExpiredWindow {
+            usage.note = "Codex 本機額度快照已過重置時間；下一次 Codex 回覆後再同步"
+            return usage
+        }
+
+        usage.primaryLimit = latestLimitSnapshot.primaryLimit
+        usage.secondaryLimit = latestLimitSnapshot.secondaryLimit
+        usage.planType = latestLimitSnapshot.planType
+        if usage.primaryLimit == nil && usage.secondaryLimit == nil {
+            usage.note = "Codex 本機額度快照不含可顯示的額度"
+        }
         return usage
     }
 
@@ -157,6 +192,19 @@ struct UsageCollector {
             return true
         }
         return limitID == "codex"
+    }
+
+    private func hasExpiredCodexRateWindow(_ rateLimits: [String: Any]) -> Bool {
+        ["primary", "secondary"].contains { key in
+            guard
+                let window = rateLimits[key] as? [String: Any],
+                let reset = doubleValue(window["resets_at"]),
+                reset > 0
+            else {
+                return false
+            }
+            return Date(timeIntervalSince1970: reset) <= now
+        }
     }
 
     private func collectClaudeLocal(windows: TimeWindows, currentAuthState: ClaudeAuthState?) throws -> ProviderUsage {

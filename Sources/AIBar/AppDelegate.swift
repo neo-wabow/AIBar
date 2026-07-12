@@ -15,10 +15,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         setupStatusItem()
         setupPopover()
         bindStore()
+        observeSystemWake()
         updateStatusItem()
 
         Task {
             await store.refresh()
+        }
+    }
+
+    // The periodic timer does not fire while the Mac is asleep, so refresh immediately on
+    // wake instead of waiting up to a full interval for stale data to update.
+    private func observeSystemWake() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { await self?.store.refresh() }
         }
     }
 

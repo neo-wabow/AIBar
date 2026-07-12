@@ -24,6 +24,9 @@ final class UsageStore: ObservableObject {
     private static let refreshInterval: TimeInterval = 60
     private var timer: Timer?
     private var preferenceCancellable: AnyCancellable?
+    // Holds the process in an "active" state so macOS App Nap does not suspend the
+    // background refresh timer/network while this menu-bar-only (LSUIElement) app is idle.
+    private var backgroundActivity: NSObjectProtocol?
 
     var menuBarSymbol: String {
         if let lowest = menuBarRemainingValues().min(), lowest <= 20 {
@@ -106,9 +109,23 @@ final class UsageStore: ObservableObject {
     init(preferences: DisplayPreferences = .shared) {
         self.preferences = preferences
         nextRefreshAt = Date().addingTimeInterval(Self.refreshInterval)
-        timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
+
+        // Prevent App Nap from freezing the periodic refresh while the app sits idle in
+        // the menu bar. We still allow the system to sleep normally; on wake AppDelegate
+        // triggers an immediate refresh.
+        backgroundActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep, .suddenTerminationDisabled],
+            reason: "Periodic AI usage polling"
+        )
+
+        // Schedule on .common so the timer keeps firing even while the popover/menu is
+        // open (which puts the run loop into event-tracking mode).
+        let timer = Timer(timeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+
         preferenceCancellable = preferences.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
@@ -116,6 +133,9 @@ final class UsageStore: ObservableObject {
 
     deinit {
         timer?.invalidate()
+        if let backgroundActivity {
+            ProcessInfo.processInfo.endActivity(backgroundActivity)
+        }
     }
 
     func refresh() async {

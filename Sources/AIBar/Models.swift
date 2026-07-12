@@ -22,7 +22,7 @@ enum ProviderKind: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .codex: return "官方 rate limit 剩餘"
+        case .codex: return "Codex 本機額度快照"
         case .claude: return "官方 statusline 剩餘"
         }
     }

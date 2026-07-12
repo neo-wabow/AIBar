@@ -101,7 +101,7 @@ struct ProviderCard: View {
     }
 
     private var unavailableText: String {
-        usage.kind == .claude && !usage.hasOfficialLimits ? "未同步" : "重置 --"
+        usage.hasOfficialLimits ? "重置 --" : "未同步"
     }
 
     private var cardBackground: Color {
