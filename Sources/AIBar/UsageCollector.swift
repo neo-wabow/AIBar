@@ -36,7 +36,10 @@ struct UsageCollector {
         let windows = TimeWindows(calendar: calendar, now: now)
 
         do {
-            snapshot.codex = try collectCodex(windows: windows)
+            snapshot.codex = try collectCodex(
+                windows: windows,
+                currentAuthState: currentCodexAuthState()
+            )
         } catch {
             snapshot.errors.append("Codex: \(error.localizedDescription)")
         }
@@ -80,13 +83,20 @@ struct UsageCollector {
         return snapshot
     }
 
-    private func collectCodex(windows: TimeWindows) throws -> ProviderUsage {
+    private func collectCodex(
+        windows: TimeWindows,
+        currentAuthState: CodexAuthState?
+    ) throws -> ProviderUsage {
         let roots = codexSessionRoots()
         var checkedRoots: [URL] = []
 
         for root in roots {
             checkedRoots.append(root)
-            let usage = collectCodex(windows: windows, root: root)
+            let usage = collectCodex(
+                windows: windows,
+                root: root,
+                currentAuthState: currentAuthState
+            )
             if usage.events > 0 {
                 return usage
             }
@@ -97,7 +107,11 @@ struct UsageCollector {
         return usage
     }
 
-    private func collectCodex(windows: TimeWindows, root: URL) -> ProviderUsage {
+    private func collectCodex(
+        windows: TimeWindows,
+        root: URL,
+        currentAuthState: CodexAuthState?
+    ) -> ProviderUsage {
         var usage = ProviderUsage(kind: .codex)
         let files = recentJSONLFiles(under: root, modifiedAfter: windows.weekStart)
         usage.sourceFiles = files.count
@@ -163,9 +177,13 @@ struct UsageCollector {
             return usage
         }
 
+        usage.planType = latestLimitSnapshot.planType
         if observedPlanTypes.count > 1 {
-            usage.note = "偵測到不同 Codex 方案的本機快照（\(observedPlanTypes.sorted().joined(separator: "、"))）；無法確認目前登入帳號，已停止顯示額度"
-            return usage
+            usage.note = codexPlanSelectionNote(
+                observedPlanTypes: observedPlanTypes,
+                latestPlanType: latestLimitSnapshot.planType,
+                currentAuthState: currentAuthState
+            )
         }
 
         if latestLimitSnapshot.hasExpiredWindow {
@@ -175,7 +193,6 @@ struct UsageCollector {
 
         usage.primaryLimit = latestLimitSnapshot.primaryLimit
         usage.secondaryLimit = latestLimitSnapshot.secondaryLimit
-        usage.planType = latestLimitSnapshot.planType
         if usage.primaryLimit == nil && usage.secondaryLimit == nil {
             usage.note = "Codex 本機額度快照不含可顯示的額度"
         }
@@ -204,6 +221,38 @@ struct UsageCollector {
                 return false
             }
             return Date(timeIntervalSince1970: reset) <= now
+        }
+    }
+
+    private func codexPlanSelectionNote(
+        observedPlanTypes: Set<String>,
+        latestPlanType: String?,
+        currentAuthState: CodexAuthState?
+    ) -> String {
+        let latest = latestPlanType.map(codexPlanDisplayName) ?? "未知"
+        var olderPlanTypes = observedPlanTypes
+        if let latestPlanType {
+            olderPlanTypes.remove(latestPlanType)
+        }
+        let older = olderPlanTypes
+            .sorted()
+            .map(codexPlanDisplayName)
+            .joined(separator: "、")
+
+        guard let authPlan = currentAuthState?.planType else {
+            return "目前顯示最新 Codex 回覆回報的 \(latest) 額度；已略過較舊的 \(older) 快照"
+        }
+
+        let auth = codexPlanDisplayName(authPlan)
+        let refresh = currentAuthState?.refreshedAt.map { DateFormatters.reset.string(from: $0) } ?? "未知時間"
+        return "目前顯示最新 Codex 回覆回報的 \(latest) 額度；已略過較舊的 \(older) 快照。本機登入憑證仍標示 \(auth)（更新於 \(refresh)）"
+    }
+
+    private func codexPlanDisplayName(_ planType: String) -> String {
+        switch planType.lowercased() {
+        case "plus": return "Plus"
+        case "pro", "prolite": return "Pro"
+        default: return planType
         }
     }
 
@@ -561,6 +610,47 @@ struct UsageCollector {
         )
     }
 
+    /// The login token exposes the plan recorded when Codex last refreshed its
+    /// credentials. It is useful as an identity signal, but not as a quota
+    /// source: an entitlement can change before this cached token is refreshed.
+    private func currentCodexAuthState() -> CodexAuthState? {
+        let authFile = homeURL().appendingPathComponent(".codex/auth.json")
+        guard let object = readJSONObject(from: authFile) else { return nil }
+
+        let refreshedAt = parseTimestamp(stringValue(object["last_refresh"]))
+        guard
+            let tokens = object["tokens"] as? [String: Any],
+            let idToken = stringValue(tokens["id_token"]),
+            let payload = jwtPayload(idToken),
+            let auth = payload["https://api.openai.com/auth"] as? [String: Any]
+        else {
+            return CodexAuthState(planType: nil, refreshedAt: refreshedAt)
+        }
+
+        return CodexAuthState(
+            planType: stringValue(auth["chatgpt_plan_type"]),
+            refreshedAt: refreshedAt
+        )
+    }
+
+    private func jwtPayload(_ token: String) -> [String: Any]? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+
+        var payload = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
+
+        guard
+            let data = Data(base64Encoded: payload),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return nil
+        }
+        return object
+    }
+
     private func claudeAuthStaleReason(
         snapshot: [String: Any],
         accountName: String,
@@ -871,6 +961,11 @@ private struct ClaudeAuthState {
         }
         return "目前帳號"
     }
+}
+
+private struct CodexAuthState {
+    let planType: String?
+    let refreshedAt: Date?
 }
 
 private struct ClaudeRateLimitError {

@@ -105,6 +105,9 @@ struct ProviderCard: View {
     }
 
     private var cardBackground: Color {
+        if !usage.hasOfficialLimits {
+            return Color(red: 0.96, green: 0.97, blue: 0.98)
+        }
         guard let remaining = displayedRemaining else { return AppColors.panel }
         if remaining <= 20 { return Color(red: 1.00, green: 0.94, blue: 0.93) }
         if remaining <= 45 { return Color(red: 1.00, green: 0.97, blue: 0.90) }
