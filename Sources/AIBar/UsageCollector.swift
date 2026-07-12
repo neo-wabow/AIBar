@@ -339,20 +339,14 @@ struct UsageCollector {
 
         for account in cloud {
             let key = mergeKey(account.claudeMergeKey ?? account.accountName)
-            if var existing = chosen[key] {
-                if existing.hasOfficialLimits && !existing.hasExpiredOfficialWindow {
-                    // Statusline is fresh — it reflects CLI activity in real time —
-                    // so keep it, but prefer the configured label (e.g. the account
-                    // email) over the config-dir-derived name.
-                    if let label = account.accountName, !label.isEmpty {
-                        existing.accountName = label
-                        chosen[key] = existing
-                    }
-                } else {
-                    // Statusline is missing official limits or its window already
-                    // expired (idle — the CLI is echoing stale numbers). The cloud
-                    // reading is live, so use it; keep the friendlier resolved label
-                    // (e.g. the account email) when the cloud entry lacks one.
+            if let existing = chosen[key] {
+                if account.hasOfficialLimits {
+                    // Both sources describe this account. The cloud reading is the
+                    // authoritative live quota — it is polled continuously (even while
+                    // idle), whereas the statusline snapshot freezes between Claude Code
+                    // renders and under-reports recent usage. Prefer cloud, but keep the
+                    // friendlier resolved label (e.g. the account email) when the cloud
+                    // entry only has the generic config-dir name.
                     var live = account
                     let cloudLabel = live.accountName?.trimmingCharacters(in: .whitespacesAndNewlines)
                     if cloudLabel == nil || cloudLabel!.isEmpty || cloudLabel == "default" {
@@ -361,6 +355,15 @@ struct UsageCollector {
                         }
                     }
                     chosen[key] = live
+                } else {
+                    // Cloud has no usable limits (e.g. the API failed with no cached
+                    // value). Keep the statusline reading, but adopt the friendlier
+                    // configured label if it has one.
+                    var kept = existing
+                    if let label = account.accountName, !label.isEmpty, label != "default" {
+                        kept.accountName = label
+                    }
+                    chosen[key] = kept
                 }
             } else {
                 order.append(key)
