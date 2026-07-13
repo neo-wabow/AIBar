@@ -30,23 +30,27 @@ struct ProviderCard: View {
         VStack(alignment: .leading, spacing: 9) {
             header
 
-            MeterRow(
-                label: "5 小時",
-                remaining: primaryRemaining,
-                resetAt: usage.primaryLimit?.resetsAt,
-                isExpired: usage.primaryLimit?.isExpired == true,
-                accent: accent,
-                unavailableText: unavailableText
-            )
+            if usage.kind != .codex || usage.primaryLimit != nil {
+                MeterRow(
+                    label: limitLabel(for: usage.primaryLimit, fallback: "5 小時"),
+                    remaining: primaryRemaining,
+                    resetAt: usage.primaryLimit?.resetsAt,
+                    isExpired: usage.primaryLimit?.isExpired == true,
+                    accent: accent,
+                    unavailableText: unavailableText
+                )
+            }
 
-            MeterRow(
-                label: "一週",
-                remaining: secondaryRemaining,
-                resetAt: usage.secondaryLimit?.resetsAt,
-                isExpired: usage.secondaryLimit?.isExpired == true,
-                accent: accent,
-                unavailableText: unavailableText
-            )
+            if usage.kind != .codex || usage.secondaryLimit != nil {
+                MeterRow(
+                    label: limitLabel(for: usage.secondaryLimit, fallback: "一週"),
+                    remaining: secondaryRemaining,
+                    resetAt: usage.secondaryLimit?.resetsAt,
+                    isExpired: usage.secondaryLimit?.isExpired == true,
+                    accent: accent,
+                    unavailableText: unavailableText
+                )
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
@@ -108,6 +112,14 @@ struct ProviderCard: View {
 
     private var unavailableText: String {
         usage.hasOfficialLimits ? "重置 --" : "未同步"
+    }
+
+    private func limitLabel(for limit: RateWindow?, fallback: String) -> String {
+        guard let minutes = limit?.windowMinutes, minutes > 0 else { return fallback }
+        if minutes == 7 * 24 * 60 { return "一週" }
+        if minutes % (24 * 60) == 0 { return "\(minutes / (24 * 60)) 天" }
+        if minutes % 60 == 0 { return "\(minutes / 60) 小時" }
+        return "\(minutes) 分鐘"
     }
 
     private var cardBackground: Color {
