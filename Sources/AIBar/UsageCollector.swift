@@ -36,10 +36,7 @@ struct UsageCollector {
         let windows = TimeWindows(calendar: calendar, now: now)
 
         do {
-            snapshot.codex = try collectCodex(
-                windows: windows,
-                currentAuthState: currentCodexAuthState()
-            )
+            snapshot.codex = try collectCodex(windows: windows)
         } catch {
             snapshot.errors.append("Codex: \(error.localizedDescription)")
         }
@@ -83,20 +80,13 @@ struct UsageCollector {
         return snapshot
     }
 
-    private func collectCodex(
-        windows: TimeWindows,
-        currentAuthState: CodexAuthState?
-    ) throws -> ProviderUsage {
+    private func collectCodex(windows: TimeWindows) throws -> ProviderUsage {
         let roots = codexSessionRoots()
         var checkedRoots: [URL] = []
 
         for root in roots {
             checkedRoots.append(root)
-            let usage = collectCodex(
-                windows: windows,
-                root: root,
-                currentAuthState: currentAuthState
-            )
+            let usage = collectCodex(windows: windows, root: root)
             if usage.events > 0 {
                 return usage
             }
@@ -107,16 +97,12 @@ struct UsageCollector {
         return usage
     }
 
-    private func collectCodex(
-        windows: TimeWindows,
-        root: URL,
-        currentAuthState: CodexAuthState?
-    ) -> ProviderUsage {
+    private func collectCodex(windows: TimeWindows, root: URL) -> ProviderUsage {
         var usage = ProviderUsage(kind: .codex)
         let files = recentJSONLFiles(under: root, modifiedAfter: windows.weekStart)
         usage.sourceFiles = files.count
         var latestLimitSnapshot: CodexRateLimitSnapshot?
-        var observedPlanTypes = Set<String>()
+        var latestPlanEventAt: [String: Date] = [:]
 
         for file in files {
             for line in readLines(from: file) where line.contains("\"token_count\"") {
@@ -155,7 +141,7 @@ struct UsageCollector {
                     let secondaryLimit = rateWindow(from: rateLimits["secondary"] as? [String: Any])
                     let planType = stringValue(rateLimits["plan_type"])
                     if let planType {
-                        observedPlanTypes.insert(planType)
+                        latestPlanEventAt[planType] = max(latestPlanEventAt[planType] ?? .distantPast, timestamp)
                     }
 
                     let candidate = CodexRateLimitSnapshot(
@@ -178,11 +164,14 @@ struct UsageCollector {
         }
 
         usage.planType = latestLimitSnapshot.planType
-        if observedPlanTypes.count > 1 {
+        let recentOlderPlans = recentOlderCodexPlans(
+            latestPlanEventAt: latestPlanEventAt,
+            latestPlanType: latestLimitSnapshot.planType
+        )
+        if !recentOlderPlans.isEmpty {
             usage.note = codexPlanSelectionNote(
-                observedPlanTypes: observedPlanTypes,
-                latestPlanType: latestLimitSnapshot.planType,
-                currentAuthState: currentAuthState
+                olderPlanEvents: recentOlderPlans,
+                latestPlanType: latestLimitSnapshot.planType
             )
         }
 
@@ -225,27 +214,30 @@ struct UsageCollector {
     }
 
     private func codexPlanSelectionNote(
-        observedPlanTypes: Set<String>,
-        latestPlanType: String?,
-        currentAuthState: CodexAuthState?
+        olderPlanEvents: [String: Date],
+        latestPlanType: String?
     ) -> String {
         let latest = latestPlanType.map(codexPlanDisplayName) ?? "未知"
-        var olderPlanTypes = observedPlanTypes
-        if let latestPlanType {
-            olderPlanTypes.remove(latestPlanType)
-        }
-        let older = olderPlanTypes
-            .sorted()
-            .map(codexPlanDisplayName)
+        let older = olderPlanEvents
+            .sorted { $0.value > $1.value }
+            .map { planType, timestamp in
+                "\(DateFormatters.reset.string(from: timestamp)) 的 \(codexPlanDisplayName(planType))"
+            }
             .joined(separator: "、")
+        return "目前顯示最新 Codex 回覆回報的 \(latest) 額度；已略過 \(older) 快照"
+    }
 
-        guard let authPlan = currentAuthState?.planType else {
-            return "目前顯示最新 Codex 回覆回報的 \(latest) 額度；已略過較舊的 \(older) 快照"
+    /// A plan change deserves a short explanation, but historic session files
+    /// must not keep an old-plan warning alive indefinitely. After 24 hours the
+    /// newest plan is treated as the only active plan for display purposes.
+    private func recentOlderCodexPlans(
+        latestPlanEventAt: [String: Date],
+        latestPlanType: String?
+    ) -> [String: Date] {
+        let cutoff = now.addingTimeInterval(-24 * 60 * 60)
+        return latestPlanEventAt.filter { planType, timestamp in
+            planType != latestPlanType && timestamp >= cutoff
         }
-
-        let auth = codexPlanDisplayName(authPlan)
-        let refresh = currentAuthState?.refreshedAt.map { DateFormatters.reset.string(from: $0) } ?? "未知時間"
-        return "目前顯示最新 Codex 回覆回報的 \(latest) 額度；已略過較舊的 \(older) 快照。本機登入憑證仍標示 \(auth)（更新於 \(refresh)）"
     }
 
     private func codexPlanDisplayName(_ planType: String) -> String {
@@ -625,47 +617,6 @@ struct UsageCollector {
         )
     }
 
-    /// The login token exposes the plan recorded when Codex last refreshed its
-    /// credentials. It is useful as an identity signal, but not as a quota
-    /// source: an entitlement can change before this cached token is refreshed.
-    private func currentCodexAuthState() -> CodexAuthState? {
-        let authFile = homeURL().appendingPathComponent(".codex/auth.json")
-        guard let object = readJSONObject(from: authFile) else { return nil }
-
-        let refreshedAt = parseTimestamp(stringValue(object["last_refresh"]))
-        guard
-            let tokens = object["tokens"] as? [String: Any],
-            let idToken = stringValue(tokens["id_token"]),
-            let payload = jwtPayload(idToken),
-            let auth = payload["https://api.openai.com/auth"] as? [String: Any]
-        else {
-            return CodexAuthState(planType: nil, refreshedAt: refreshedAt)
-        }
-
-        return CodexAuthState(
-            planType: stringValue(auth["chatgpt_plan_type"]),
-            refreshedAt: refreshedAt
-        )
-    }
-
-    private func jwtPayload(_ token: String) -> [String: Any]? {
-        let parts = token.split(separator: ".")
-        guard parts.count >= 2 else { return nil }
-
-        var payload = String(parts[1])
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
-
-        guard
-            let data = Data(base64Encoded: payload),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return nil
-        }
-        return object
-    }
-
     private func claudeAuthStaleReason(
         snapshot: [String: Any],
         accountName: String,
@@ -987,11 +938,6 @@ private struct ClaudeAuthState {
         }
         return "目前帳號"
     }
-}
-
-private struct CodexAuthState {
-    let planType: String?
-    let refreshedAt: Date?
 }
 
 private struct ClaudeRateLimitError {
