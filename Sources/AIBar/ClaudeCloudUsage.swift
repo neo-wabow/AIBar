@@ -146,11 +146,17 @@ struct ClaudeCloudClient {
     static let oauthBeta = "oauth-2025-04-20"
     static let anthropicVersion = "2023-06-01"
     static let refreshSkewSeconds: TimeInterval = 120
-    /// Minimum spacing between usage-endpoint calls per account. Normal ~60s
-    /// refreshes fetch fresh; this only coalesces bursts of calls within a few
-    /// seconds (which can trigger HTTP 429), and the cache doubles as a
-    /// last-known-value fallback when a fetch fails.
-    static let pollInterval: TimeInterval = 30
+    /// Minimum spacing between usage-endpoint calls per account. Quota moves slowly
+    /// (5h / 7d windows), so a 2-minute freshness is plenty. Because this is longer
+    /// than the 60s UI refresh, roughly half the periodic refreshes — plus every
+    /// popover-open / wake burst — are served straight from cache and never touch
+    /// the API, which is what keeps the endpoint from returning HTTP 429. The cache
+    /// also doubles as a last-known-value fallback when a fetch fails.
+    static let pollInterval: TimeInterval = 120
+    /// After the endpoint rate-limits an account (HTTP 429), hold off on further API
+    /// calls for this long so the periodic refresh does not keep hammering it every
+    /// 60s. Until then the last synced value stays visible with a "限流" note.
+    static let backoffInterval: TimeInterval = 300
 
     /// The OAuth client id used for token refresh. Mirrors the CLI: an explicit
     /// `CLAUDE_CODE_OAUTH_CLIENT_ID` wins, otherwise the production client id.
@@ -179,6 +185,12 @@ struct ClaudeCloudClient {
         // endpoint rate-limits frequent polling.
         if let cached, now.timeIntervalSince(cached.capturedAt) < Self.pollInterval {
             return build(cached.json, capturedAt: cached.capturedAt, note: nil)
+        }
+
+        // This account was recently rate-limited: hold off on hitting the API until
+        // the backoff expires, and keep showing the last synced value meanwhile.
+        if let cached, let until = cached.backoffUntil, now < until {
+            return build(cached.json, capturedAt: cached.capturedAt, note: staleNote(for: .httpError(429, "")))
         }
 
         guard
@@ -214,6 +226,9 @@ struct ClaudeCloudClient {
             writeCache(service: service, json: usageJSON)
             return build(usageJSON, capturedAt: now, note: nil)
         } catch let error as ClaudeCloudError {
+            if case .httpError(429, _) = error {
+                markBackoff(service: service)
+            }
             if let cached {
                 return build(cached.json, capturedAt: cached.capturedAt, note: staleNote(for: error))
             }
@@ -282,7 +297,7 @@ struct ClaudeCloudClient {
         return cacheDirectory.appendingPathComponent("\(safe).json")
     }
 
-    private func readCache(service: String) -> (capturedAt: Date, json: [String: Any])? {
+    private func readCache(service: String) -> (capturedAt: Date, json: [String: Any], backoffUntil: Date?)? {
         guard
             let data = try? Data(contentsOf: cacheURL(service: service)),
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -291,14 +306,31 @@ struct ClaudeCloudClient {
         else {
             return nil
         }
-        return (Date(timeIntervalSince1970: timestamp), usage)
+        let backoffUntil = doubleValue(object["backoff_until"]).map { Date(timeIntervalSince1970: $0) }
+        return (Date(timeIntervalSince1970: timestamp), usage, backoffUntil)
     }
 
     private func writeCache(service: String, json: [String: Any]) {
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        // A successful fetch clears any prior backoff by omitting backoff_until.
         let payload: [String: Any] = ["captured_at": now.timeIntervalSince1970, "usage": json]
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         try? data.write(to: cacheURL(service: service), options: .atomic)
+    }
+
+    /// Records a rate-limit backoff into the existing cache file, preserving the last
+    /// successful snapshot (captured_at / usage) so the displayed value and its sync
+    /// time stay intact while API calls are paused.
+    private func markBackoff(service: String) {
+        guard
+            let data = try? Data(contentsOf: cacheURL(service: service)),
+            var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else {
+            return
+        }
+        object["backoff_until"] = now.timeIntervalSince1970 + Self.backoffInterval
+        guard let out = try? JSONSerialization.data(withJSONObject: object) else { return }
+        try? out.write(to: cacheURL(service: service), options: .atomic)
     }
 
     /// The account name the statusline hook would derive for a config dir, used to
