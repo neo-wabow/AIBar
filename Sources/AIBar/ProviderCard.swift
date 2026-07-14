@@ -19,6 +19,13 @@ struct ProviderCard: View {
         return primaryRemaining ?? secondaryRemaining
     }
 
+    /// Base card fits the header + two overall meter rows. Each per-model scoped
+    /// row (e.g. Fable) adds one more meter row; kept in sync with the popover's
+    /// height math via the shared helper.
+    private var cardHeight: CGFloat {
+        UsageStore.cardHeight(scopedCount: usage.scopedLimits.count)
+    }
+
     private var cardTitle: String {
         if showsAccountName, let accountName = usage.accountName, !accountName.isEmpty, accountName != "default" {
             return accountName
@@ -51,11 +58,24 @@ struct ProviderCard: View {
                     unavailableText: unavailableText
                 )
             }
+
+            // Per-model weekly windows (e.g. Fable) shown below the overall limits,
+            // mirroring the official dashboard's "All models" / "Fable" split.
+            ForEach(Array(usage.scopedLimits.enumerated()), id: \.offset) { _, scoped in
+                MeterRow(
+                    label: scoped.label,
+                    remaining: scoped.window.remainingPercent,
+                    resetAt: scoped.window.resetsAt,
+                    isExpired: scoped.window.isExpired,
+                    accent: accent,
+                    unavailableText: unavailableText
+                )
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .frame(maxWidth: .infinity)
-        .frame(height: 96)
+        .frame(height: cardHeight)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)

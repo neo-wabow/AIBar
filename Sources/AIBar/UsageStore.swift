@@ -72,28 +72,51 @@ final class UsageStore: ObservableObject {
     // scrollable list stay in sync as the number of accounts grows.
     static let providerRowHeight: CGFloat = 96
     static let providerRowSpacing: CGFloat = 8
+    /// Extra height each per-model scoped row (e.g. Fable) adds to a card. Must stay
+    /// in sync with `ProviderCard`'s own layout.
+    static let scopedRowHeight: CGFloat = 29
 
-    /// Height of the (possibly scrolling) provider list: shows up to a cap of rows,
-    /// beyond which the list scrolls. The cap is lower when an error panel is shown.
-    static func providerListHeight(rowCount: Int, hasErrors: Bool) -> CGFloat {
-        let cap = hasErrors ? 3 : 4
-        let visibleRows = max(1, min(rowCount, cap))
-        return CGFloat(visibleRows) * providerRowHeight
-            + CGFloat(max(visibleRows - 1, 0)) * providerRowSpacing
+    /// Rendered height of a single card, accounting for any per-model scoped rows.
+    static func cardHeight(scopedCount: Int) -> CGFloat {
+        providerRowHeight + CGFloat(scopedCount) * scopedRowHeight
     }
 
-    static func providerListScrolls(rowCount: Int, hasErrors: Bool) -> Bool {
-        rowCount > (hasErrors ? 3 : 4)
+    /// Pixel budget for the list before it starts scrolling: the cap number of
+    /// base-height rows. Cards taller than the base (Fable etc.) eat into it, so a
+    /// couple of tall cards can trigger scrolling sooner than the raw account count.
+    private static func providerListCap(hasErrors: Bool) -> CGFloat {
+        let cap = hasErrors ? 3 : 4
+        return CGFloat(cap) * providerRowHeight + CGFloat(cap - 1) * providerRowSpacing
+    }
+
+    private static func providerListContentHeight(cardHeights: [CGFloat]) -> CGFloat {
+        let heights = cardHeights.isEmpty ? [providerRowHeight] : cardHeights
+        return heights.reduce(0, +) + CGFloat(max(heights.count - 1, 0)) * providerRowSpacing
+    }
+
+    /// Height of the (possibly scrolling) provider list. Uses each card's real
+    /// height so tall cards aren't clipped, capped at the pixel budget above which
+    /// the list scrolls.
+    static func providerListHeight(cardHeights: [CGFloat], hasErrors: Bool) -> CGFloat {
+        min(providerListContentHeight(cardHeights: cardHeights), providerListCap(hasErrors: hasErrors))
+    }
+
+    static func providerListScrolls(cardHeights: [CGFloat], hasErrors: Bool) -> Bool {
+        providerListContentHeight(cardHeights: cardHeights) > providerListCap(hasErrors: hasErrors) + 0.5
     }
 
     var popoverSize: CGSize {
         CGSize(width: 400, height: ceil(popoverContentHeight))
     }
 
+    /// Real rendered height of each visible provider card, in display order.
+    var providerCardHeights: [CGFloat] {
+        visibleProviders.map { Self.cardHeight(scopedCount: $0.scopedLimits.count) }
+    }
+
     private var popoverContentHeight: CGFloat {
-        let rowCount = max(visibleProviders.count, 1)
         let providerListHeight = Self.providerListHeight(
-            rowCount: rowCount,
+            cardHeights: providerCardHeights,
             hasErrors: !snapshot.errors.isEmpty
         )
         let controlsHeight: CGFloat = 41

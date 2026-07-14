@@ -50,14 +50,14 @@ struct UsagePopover: View {
 
     private var providerListHeight: CGFloat {
         UsageStore.providerListHeight(
-            rowCount: max(store.visibleProviders.count, 1),
+            cardHeights: store.providerCardHeights,
             hasErrors: !store.snapshot.errors.isEmpty
         )
     }
 
     private var listScrolls: Bool {
         UsageStore.providerListScrolls(
-            rowCount: store.visibleProviders.count,
+            cardHeights: store.providerCardHeights,
             hasErrors: !store.snapshot.errors.isEmpty
         )
     }

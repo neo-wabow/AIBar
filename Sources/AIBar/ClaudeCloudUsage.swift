@@ -492,6 +492,7 @@ struct ClaudeCloudClient {
 
         usage.primaryLimit = rateWindow(from: json["five_hour"] as? [String: Any], windowMinutes: 5 * 60)
         usage.secondaryLimit = rateWindow(from: json["seven_day"] as? [String: Any], windowMinutes: 7 * 24 * 60)
+        usage.scopedLimits = scopedLimits(from: json["limits"] as? [[String: Any]])
 
         if usage.primaryLimit == nil, usage.secondaryLimit == nil {
             usage.note = note ?? "此帳號目前無 quota 資料"
@@ -499,6 +500,37 @@ struct ClaudeCloudClient {
             usage.note = note
         }
         return usage
+    }
+
+    /// Extracts per-model weekly windows from the official `limits` array. Each
+    /// entry with `kind == "weekly_scoped"` carries a `scope.model.display_name`
+    /// (e.g. "Fable") plus its own `percent`/`resets_at`. Overall entries
+    /// (`weekly_all`, session) are ignored here — they map to the primary/secondary
+    /// windows already read from the top-level `five_hour`/`seven_day` fields.
+    private func scopedLimits(from limits: [[String: Any]]?) -> [ScopedLimit] {
+        guard let limits else { return [] }
+        return limits.compactMap { entry -> ScopedLimit? in
+            guard (entry["kind"] as? String) == "weekly_scoped" else { return nil }
+            guard
+                let scope = entry["scope"] as? [String: Any],
+                let model = scope["model"] as? [String: Any],
+                let label = (model["display_name"] as? String)?.trimmingCharacters(in: .whitespaces),
+                !label.isEmpty
+            else { return nil }
+
+            let used = doubleValue(entry["percent"])
+            let resetsAt = parseISODate(entry["resets_at"] as? String)
+            let isExpired = resetsAt.map { $0 <= now } ?? false
+            guard used != nil || resetsAt != nil else { return nil }
+
+            let window = RateWindow(
+                usedPercent: used,
+                windowMinutes: 7 * 24 * 60,
+                resetsAt: resetsAt,
+                isExpired: isExpired
+            )
+            return ScopedLimit(label: label, window: window)
+        }
     }
 
     private func rateWindow(from dictionary: [String: Any]?, windowMinutes: Int) -> RateWindow? {

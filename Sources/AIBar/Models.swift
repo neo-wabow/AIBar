@@ -69,6 +69,14 @@ struct RateWindow: Equatable {
     }
 }
 
+/// A per-model weekly window (e.g. "Fable") that sits alongside the overall
+/// "All models" limit. Surfaced in the card only; intentionally kept out of the
+/// menu-bar worst-quota calculation, which tracks the overall session/weekly caps.
+struct ScopedLimit: Equatable {
+    var label: String
+    var window: RateWindow
+}
+
 struct ProviderUsage: Identifiable, Equatable {
     var id: String {
         if let accountName, !accountName.isEmpty {
@@ -91,6 +99,9 @@ struct ProviderUsage: Identifiable, Equatable {
     var sourceFiles: Int = 0
     var primaryLimit: RateWindow?
     var secondaryLimit: RateWindow?
+    /// Per-model weekly windows (e.g. Fable), parsed from the official `limits`
+    /// array. Displayed below the overall limits; not part of the menu-bar worst %.
+    var scopedLimits: [ScopedLimit] = []
     var planType: String?
     var latestModel: String?
     var liveContext: TokenTotals?
