@@ -28,6 +28,15 @@ final class UsageStore: ObservableObject {
     // background refresh timer/network while this menu-bar-only (LSUIElement) app is idle.
     private var backgroundActivity: NSObjectProtocol?
 
+    /// The placeholder snapshot has no live data yet. Keep it separate from a
+    /// later refresh so the popover can make the first load unambiguous without
+    /// hiding already-visible usage while it updates.
+    @Published private(set) var hasCompletedInitialRefresh = false
+
+    var isLoadingInitialSnapshot: Bool {
+        isRefreshing && !hasCompletedInitialRefresh
+    }
+
     var menuBarSymbol: String {
         if let lowest = menuBarRemainingValues().min(), lowest <= 20 {
             return "exclamationmark.triangle.fill"
@@ -43,6 +52,17 @@ final class UsageStore: ObservableObject {
     }
 
     var menuBarLines: [MenuBarStatusLine] {
+        if isLoadingInitialSnapshot {
+            return [
+                MenuBarStatusLine(
+                    symbolName: "arrow.triangle.2.circlepath",
+                    name: "AI",
+                    code: "AI",
+                    value: "讀取中"
+                )
+            ]
+        }
+
         let providers = Array(visibleProviders.prefix(2))
         let codes = MenuBarCodeResolver.resolve(for: providers)
 
@@ -169,6 +189,7 @@ final class UsageStore: ObservableObject {
         }.value
         snapshot = newSnapshot
         nextRefreshAt = Date().addingTimeInterval(Self.refreshInterval)
+        hasCompletedInitialRefresh = true
         isRefreshing = false
     }
 

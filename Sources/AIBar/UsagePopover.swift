@@ -21,31 +21,51 @@ struct UsagePopover: View {
             )
             .ignoresSafeArea()
 
-            VStack(spacing: 9) {
-                ScrollView(.vertical, showsIndicators: listScrolls) {
-                    VStack(spacing: providerRowSpacing) {
-                        ForEach(store.visibleProviders) { provider in
-                            providerCard(for: provider)
+            if store.isLoadingInitialSnapshot {
+                initialLoadingView
+            } else {
+                VStack(spacing: 9) {
+                    ScrollView(.vertical, showsIndicators: listScrolls) {
+                        VStack(spacing: providerRowSpacing) {
+                            ForEach(store.visibleProviders) { provider in
+                                providerCard(for: provider)
+                            }
                         }
                     }
+                    .frame(height: providerListHeight)
+
+                    displayControls
+
+                    footer
+
+                    if !store.snapshot.errors.isEmpty {
+                        errorPanel
+                    }
                 }
-                .frame(height: providerListHeight)
-
-                displayControls
-
-                footer
-
-                if !store.snapshot.errors.isEmpty {
-                    errorPanel
-                }
+                .padding(12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .environment(\.colorScheme, .light)
         .onAppear {
             Task { await store.refresh() }
         }
+    }
+
+    private var initialLoadingView: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.regular)
+            Text("正在讀取使用額度")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(AppColors.ink)
+            Text("首次載入可能需要幾秒鐘")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(AppColors.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("正在讀取使用額度")
     }
 
     private var providerListHeight: CGFloat {
@@ -92,14 +112,26 @@ struct UsagePopover: View {
             Button {
                 Task { await store.refresh() }
             } label: {
-                Image(systemName: store.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
-                    .font(.system(size: 15, weight: .semibold))
+                Group {
+                    if store.isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                }
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
+            .disabled(store.isRefreshing)
             .help("重新整理")
 
-            Text("下次更新 \(DateFormatters.timeWithSeconds.string(from: store.nextRefreshAt))")
+            Text(
+                store.isRefreshing
+                    ? "正在更新額度…"
+                    : "下次更新 \(DateFormatters.timeWithSeconds.string(from: store.nextRefreshAt))"
+            )
                 .lineLimit(1)
 
             Spacer()
