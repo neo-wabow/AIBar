@@ -105,7 +105,7 @@ struct UsageCollector {
         var latestPlanEventAt: [String: Date] = [:]
 
         for file in files {
-            for line in readLines(from: file) where line.contains("\"token_count\"") {
+            for line in linesContainingAny([Self.tokenCountMarker], in: file) {
                 guard
                     let object = parseJSONObject(line),
                     let payload = object["payload"] as? [String: Any],
@@ -256,7 +256,7 @@ struct UsageCollector {
         var seenMessageIDs = Set<String>()
 
         for file in files {
-            for line in readLines(from: file) where line.contains("\"usage\"") {
+            for line in linesContainingAny([Self.usageMarker], in: file) {
                 guard
                     let object = parseJSONObject(line),
                     let timestamp = parseTimestamp(object["timestamp"] as? String),
@@ -502,7 +502,7 @@ struct UsageCollector {
         var latest: ClaudeRateLimitError?
 
         for file in files {
-            for line in readLines(from: file) where line.contains("\"rate_limit\"") || line.contains("\"apiErrorStatus\":429") {
+            for line in linesContainingAny([Self.rateLimitMarker, Self.apiError429Marker], in: file) {
                 guard
                     let object = parseJSONObject(line),
                     let timestamp = parseTimestamp(object["timestamp"] as? String),
@@ -667,13 +667,77 @@ struct UsageCollector {
         return files.sorted { $0.path < $1.path }
     }
 
-    private func readLines(from file: URL) -> [String] {
+    // Precomputed ASCII byte patterns for the line filters below. Matching raw
+    // UTF-8 bytes avoids `String.contains`, whose Unicode-aware search over the
+    // multi-hundred-MB session logs used to dominate every refresh's CPU.
+    private static let tokenCountMarker = Array("\"token_count\"".utf8)
+    private static let usageMarker = Array("\"usage\"".utf8)
+    private static let rateLimitMarker = Array("\"rate_limit\"".utf8)
+    private static let apiError429Marker = Array("\"apiErrorStatus\":429".utf8)
+
+    /// Reads `file` and returns only the newline-delimited lines containing at
+    /// least one of `markers`, decoding a line to `String` only when it matches.
+    ///
+    /// The scan runs over raw UTF-8 bytes. The markers are ASCII, and a valid
+    /// UTF-8 stream never uses an ASCII byte inside a multi-byte scalar, so this
+    /// is equivalent to the old per-line `String.contains` test — but without
+    /// decoding and Unicode-searching every line of very large logs.
+    private func linesContainingAny(_ markers: [[UInt8]], in file: URL) -> [String] {
         guard let data = try? Data(contentsOf: file), !data.isEmpty else {
             return []
         }
-        return String(decoding: data, as: UTF8.self)
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .map(String.init)
+        var results: [String] = []
+        data.withUnsafeBytes { raw in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            let count = bytes.count
+            var lineStart = 0
+            var i = 0
+            while i <= count {
+                if i == count || bytes[i] == 0x0A {
+                    if i > lineStart,
+                       Self.lineContainsAnyMarker(bytes, from: lineStart, to: i, markers: markers) {
+                        results.append(String(decoding: bytes[lineStart..<i], as: UTF8.self))
+                    }
+                    lineStart = i + 1
+                }
+                i += 1
+            }
+        }
+        return results
+    }
+
+    private static func lineContainsAnyMarker(
+        _ bytes: UnsafeBufferPointer<UInt8>,
+        from start: Int,
+        to end: Int,
+        markers: [[UInt8]]
+    ) -> Bool {
+        for marker in markers where containsMarker(bytes, from: start, to: end, marker: marker) {
+            return true
+        }
+        return false
+    }
+
+    private static func containsMarker(
+        _ bytes: UnsafeBufferPointer<UInt8>,
+        from start: Int,
+        to end: Int,
+        marker: [UInt8]
+    ) -> Bool {
+        let m = marker.count
+        guard m > 0, end - start >= m else { return false }
+        let first = marker[0]
+        let lastStart = end - m
+        var i = start
+        while i <= lastStart {
+            if bytes[i] == first {
+                var k = 1
+                while k < m && bytes[i + k] == marker[k] { k += 1 }
+                if k == m { return true }
+            }
+            i += 1
+        }
+        return false
     }
 
     private func parseJSONObject(_ line: String) -> [String: Any]? {
