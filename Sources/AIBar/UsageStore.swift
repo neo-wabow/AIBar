@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Dispatch
 import SwiftUI
 
 struct MenuBarStatusLine: Equatable {
@@ -22,7 +23,7 @@ final class UsageStore: ObservableObject {
     let preferences: DisplayPreferences
 
     private static let refreshInterval: TimeInterval = 60
-    private var timer: Timer?
+    private var refreshTimer: DispatchSourceTimer?
     private var preferenceCancellable: AnyCancellable?
     // Holds the process in an "active" state so macOS App Nap does not suspend the
     // background refresh timer/network while this menu-bar-only (LSUIElement) app is idle.
@@ -161,13 +162,19 @@ final class UsageStore: ObservableObject {
             reason: "Periodic AI usage polling"
         )
 
-        // Schedule on .common so the timer keeps firing even while the popover/menu is
-        // open (which puts the run loop into event-tracking mode).
-        let timer = Timer(timeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
+        // A dispatch timer does not depend on the main RunLoop's current mode, which
+        // makes periodic refreshes reliable while this menu-bar app sits idle.
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(
+            deadline: .now() + Self.refreshInterval,
+            repeating: Self.refreshInterval,
+            leeway: .seconds(2)
+        )
+        timer.setEventHandler { [weak self] in
             Task { await self?.refresh() }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
+        refreshTimer = timer
+        timer.resume()
 
         preferenceCancellable = preferences.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
@@ -175,7 +182,8 @@ final class UsageStore: ObservableObject {
     }
 
     deinit {
-        timer?.invalidate()
+        refreshTimer?.setEventHandler {}
+        refreshTimer?.cancel()
         if let backgroundActivity {
             ProcessInfo.processInfo.endActivity(backgroundActivity)
         }
