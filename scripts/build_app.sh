@@ -16,5 +16,8 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp ".build/release/AIBar" "$MACOS_DIR/AIBar"
 cp "Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 
+BUILD_NUMBER="$(date '+%Y%m%d.%H%M')"
+plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$CONTENTS_DIR/Info.plist"
+
 chmod +x "$MACOS_DIR/AIBar"
 echo "$APP_DIR"

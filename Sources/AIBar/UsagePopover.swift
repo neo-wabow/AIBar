@@ -136,6 +136,11 @@ struct UsagePopover: View {
 
             Spacer()
 
+            Text(AppVersion.display)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .lineLimit(1)
+                .help("AIBar 版本與建置編號")
+
             Button {
                 onManageAccounts()
             } label: {

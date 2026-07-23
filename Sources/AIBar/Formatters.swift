@@ -1,5 +1,17 @@
 import Foundation
 
+enum AppVersion {
+    static var display: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "dev"
+        let build = info?["CFBundleVersion"] as? String
+        guard let build, !build.isEmpty else {
+            return "v\(version)"
+        }
+        return "v\(version) (\(build))"
+    }
+}
+
 enum TokenFormat {
     static func short(_ value: Int) -> String {
         let absValue = abs(value)

@@ -471,7 +471,16 @@ struct ClaudeCloudClient {
             semaphore.signal()
         }
         task.resume()
-        semaphore.wait()
+        // URLSession's request timeout does not guarantee that every failure path
+        // (notably DNS/network transitions after wake) invokes the completion
+        // handler promptly. Never let one Claude request wedge the whole collector:
+        // while this call is blocked, Codex snapshots cannot be published and the
+        // UI remains frozen at its previous percentage.
+        let deadline = DispatchTime.now() + max(request.timeoutInterval + 2, 5)
+        if semaphore.wait(timeout: deadline) == .timedOut {
+            task.cancel()
+            return (nil, nil, URLError(.timedOut))
+        }
         return (outData, outResponse, outError)
     }
 
