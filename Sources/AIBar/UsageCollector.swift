@@ -36,7 +36,20 @@ struct UsageCollector {
         let windows = TimeWindows(calendar: calendar, now: now)
 
         do {
-            snapshot.codex = try collectCodex(windows: windows)
+            var codex = try collectCodex(windows: windows)
+            if let live = CodexLiveUsageClient(
+                fileManager: fileManager,
+                now: now,
+                environment: environment
+            ).fetch() {
+                codex.primaryLimit = live.primary
+                codex.secondaryLimit = live.secondary
+                codex.planType = live.planType ?? codex.planType
+                if codex.primaryLimit != nil || codex.secondaryLimit != nil {
+                    codex.note = nil
+                }
+            }
+            snapshot.codex = codex
         } catch {
             snapshot.errors.append("Codex: \(error.localizedDescription)")
         }
