@@ -136,7 +136,7 @@ struct ClaudeAccountConfig {
 
 enum ClaudeCloudError: Error {
     case configDirMissing(String)
-    case noKeychainEntry
+    case noCredential
     case noClaudeLogin
     case tokenExpiredNoRefresh
     case refreshFailed(String)
@@ -149,8 +149,8 @@ enum ClaudeCloudError: Error {
         case .configDirMissing(let path):
             let name = (path as NSString).lastPathComponent
             return "找不到設定資料夾 \(name)(可能來自其他電腦),請重新加入此帳號"
-        case .noKeychainEntry:
-            return "找不到此帳號的 Keychain 憑證(請先在該 config dir 用 CLI 登入一次)"
+        case .noCredential:
+            return "找不到此帳號的憑證(請先在該 config dir 用 CLI 登入一次)"
         case .noClaudeLogin:
             return "此 Keychain 項目沒有 Claude 帳號登入(只有 MCP 憑證)"
         case .tokenExpiredNoRefresh:
@@ -202,8 +202,8 @@ struct ClaudeCloudClient {
     let now: Date
 
     func fetchUsage(for config: ClaudeAccountConfig) throws -> ProviderUsage {
+        // Names this account's usage cache, independent of where its credential lives.
         let service = config.keychainServiceOverride ?? ClaudeKeychain.serviceName(configDir: config.configDir)
-        let account = config.keychainAccountOverride ?? ClaudeKeychain.accountName()
         let mergeKey = Self.statuslineName(configDir: config.configDir)
 
         func build(_ json: [String: Any], capturedAt: Date, note: String?) -> ProviderUsage {
@@ -234,24 +234,33 @@ struct ClaudeCloudClient {
         }
 
         guard
-            let blob = ClaudeKeychain.read(service: service, account: account),
-            let root = (try? JSONSerialization.jsonObject(with: Data(blob.utf8))) as? [String: Any],
-            var oauth = root["claudeAiOauth"] as? [String: Any],
-            let accessToken0 = oauth["accessToken"] as? String
+            let credential = ClaudeCredentialStore.read(
+                configDir: config.configDir,
+                service: config.keychainServiceOverride,
+                account: config.keychainAccountOverride
+            )
         else {
             if let cached {
                 return build(cached.json, capturedAt: cached.capturedAt, note: "找不到有效憑證,顯示上次同步值")
             }
-            throw ClaudeCloudError.noKeychainEntry
+            throw ClaudeCloudError.noCredential
         }
 
-        var accessToken = accessToken0
-        // Refresh proactively if the access token has expired (or is about to).
-        if let expiresAtMS = intValue(oauth["expiresAt"]) {
+        var oauth = credential.oauth
+        var accessToken = credential.accessToken
+        // Refresh proactively if the access token has expired (or is about to). A zero
+        // or missing `expiresAt` says nothing about expiry — reading it as "expired in
+        // 1970" sent every fetch down the refresh path and reported a refresh failure
+        // for what is really just an absent field.
+        if let expiresAtMS = intValue(oauth["expiresAt"]), expiresAtMS > 0 {
             let expiresAt = Date(timeIntervalSince1970: Double(expiresAtMS) / 1000.0)
             if expiresAt.timeIntervalSince(now) <= Self.refreshSkewSeconds {
                 do {
-                    accessToken = try refreshAndPersist(root: root, oauth: &oauth, service: service, account: account)
+                    accessToken = try refreshAndPersist(
+                        root: credential.root,
+                        oauth: &oauth,
+                        location: credential.location
+                    )
                 } catch {
                     if let cached {
                         return build(cached.json, capturedAt: cached.capturedAt, note: "token 刷新失敗,顯示上次同步值")
@@ -290,10 +299,7 @@ struct ClaudeCloudClient {
         let cached = (try? Data(contentsOf: url))
             .flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
 
-        let token = ClaudeKeychain.read(service: service, account: ClaudeKeychain.accountName())
-            .flatMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
-            .flatMap { $0["claudeAiOauth"] as? [String: Any] }
-            .flatMap { $0["accessToken"] as? String }
+        let token = ClaudeCredentialStore.read(configDir: configDir)?.accessToken
         let fingerprint = token.map(ClaudeKeychain.fingerprint(ofToken:))
 
         if
@@ -449,12 +455,12 @@ struct ClaudeCloudClient {
         return object
     }
 
-    /// Returns the new access token and persists the rotated credentials to Keychain.
+    /// Returns the new access token and persists the rotated credentials back to the
+    /// store they were read from.
     private func refreshAndPersist(
         root: [String: Any],
         oauth: inout [String: Any],
-        service: String,
-        account: String
+        location: ClaudeCredentialStore.Location
     ) throws -> String {
         guard let refreshToken = oauth["refreshToken"] as? String, !refreshToken.isEmpty else {
             throw ClaudeCloudError.tokenExpiredNoRefresh
@@ -492,11 +498,8 @@ struct ClaudeCloudClient {
         // Re-read the freshest blob before writing, to avoid clobbering a concurrent
         // CLI refresh, then merge only the token fields we changed.
         var mergedRoot = root
-        if
-            let fresh = ClaudeKeychain.read(service: service, account: account),
-            let freshRoot = (try? JSONSerialization.jsonObject(with: Data(fresh.utf8))) as? [String: Any]
-        {
-            mergedRoot = freshRoot
+        if let fresh = ClaudeCredentialStore.read(at: location) {
+            mergedRoot = fresh.root
         }
         var mergedOauth = (mergedRoot["claudeAiOauth"] as? [String: Any]) ?? oauth
         mergedOauth["accessToken"] = newAccess
@@ -509,8 +512,8 @@ struct ClaudeCloudClient {
         mergedRoot["claudeAiOauth"] = mergedOauth
         oauth = mergedOauth
 
-        guard ClaudeKeychain.write(service: service, account: account, json: mergedRoot) else {
-            throw ClaudeCloudError.refreshFailed("寫回 Keychain 失敗")
+        guard ClaudeCredentialStore.write(mergedRoot, to: location) else {
+            throw ClaudeCloudError.refreshFailed("寫回憑證失敗")
         }
         return newAccess
     }

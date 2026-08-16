@@ -40,15 +40,14 @@ struct ClaudeAccountDiscovery {
 
         for configDir in candidateConfigDirs() {
             let service = ClaudeKeychain.serviceName(configDir: configDir)
-            guard
-                let blob = ClaudeKeychain.read(service: service, account: account),
-                let root = (try? JSONSerialization.jsonObject(with: Data(blob.utf8))) as? [String: Any],
-                let oauth = root["claudeAiOauth"] as? [String: Any],
-                let accessToken = oauth["accessToken"] as? String,
-                !accessToken.isEmpty
-            else {
+            // Keychain or `<config dir>/.credentials.json`, whichever holds the login —
+            // scanning only the Keychain hid accounts the CLI had migrated to a file,
+            // which also removed them from the picker the user would add them back with.
+            guard let credential = ClaudeCredentialStore.read(configDir: configDir, account: account) else {
                 continue
             }
+            let oauth = credential.oauth
+            let accessToken = credential.accessToken
 
             // /api/oauth/profile is authoritative for which account this token
             // belongs to; ~/.claude.json's oauthAccount can be stale. Fall back to
