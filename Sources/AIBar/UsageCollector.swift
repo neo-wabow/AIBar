@@ -55,11 +55,14 @@ struct UsageCollector {
         }
 
         do {
-            let currentClaudeAuthState = currentClaudeAuthState()
-            let localClaude = try collectClaudeLocal(windows: windows, currentAuthState: currentClaudeAuthState)
+            // ~/.claude.json describes the *default* account only; every other config
+            // dir carries its own. Resolve them separately so a non-default account is
+            // never judged against the default account's login.
+            let defaultAuthState = currentClaudeAuthState(configDir: nil)
+            let localClaude = try collectClaudeLocal(windows: windows, currentAuthState: defaultAuthState)
             let statuslineAccounts = collectClaudeStatuslineAccounts(
                 localFallback: localClaude,
-                currentAuthState: currentClaudeAuthState
+                authStates: claudeAuthStates(defaultAuthState: defaultAuthState)
             )
             let cloud = ClaudeCloudCollector(fileManager: fileManager, now: now).collect(localFallback: localClaude)
             // Per-account cloud issues (rate limits, transient failures) surface as a
@@ -401,9 +404,29 @@ struct UsageCollector {
         return usage
     }
 
+    /// Current login identity per statusline account key. A statusline snapshot has to
+    /// be compared against whoever its *own* config dir holds now: comparing every
+    /// account against ~/.claude.json marked every non-default account as stale.
+    private func claudeAuthStates(defaultAuthState: ClaudeAuthState?) -> [String: ClaudeAuthState] {
+        var states: [String: ClaudeAuthState] = [:]
+        if let defaultAuthState {
+            states["default"] = defaultAuthState
+        }
+        for config in ClaudeCloudCollector(fileManager: fileManager, now: now).accountConfigs() {
+            guard
+                let configDir = config.configDir,
+                let state = currentClaudeAuthState(configDir: configDir)
+            else {
+                continue
+            }
+            states[mergeKey(ClaudeCloudClient.statuslineName(configDir: configDir))] = state
+        }
+        return states
+    }
+
     private func collectClaudeStatuslineAccounts(
         localFallback: ProviderUsage,
-        currentAuthState: ClaudeAuthState?
+        authStates: [String: ClaudeAuthState]
     ) -> [ProviderUsage] {
         let root = homeURL()
             .appendingPathComponent(".ai-usage", isDirectory: true)
@@ -438,7 +461,7 @@ struct UsageCollector {
                 snapshot: object,
                 accountName: accountName,
                 capturedAt: usage.statuslineCapturedAt,
-                currentAuthState: currentAuthState
+                currentAuthState: authStates[mergeKey(accountName)]
             )
 
             if let model = object["model"] as? [String: Any] {
@@ -613,8 +636,12 @@ struct UsageCollector {
         return reset
     }
 
-    private func currentClaudeAuthState() -> ClaudeAuthState? {
-        let configFile = homeURL().appendingPathComponent(".claude.json")
+    /// Reads the account currently logged into a config dir. Claude Code keeps that
+    /// record inside the dir itself; only the default account's sits at ~/.claude.json.
+    private func currentClaudeAuthState(configDir: String?) -> ClaudeAuthState? {
+        let configFile = configDir.map {
+            URL(fileURLWithPath: $0, isDirectory: true).appendingPathComponent(".claude.json")
+        } ?? homeURL().appendingPathComponent(".claude.json")
         guard
             let object = readJSONObject(from: configFile),
             let oauth = object["oauthAccount"] as? [String: Any]

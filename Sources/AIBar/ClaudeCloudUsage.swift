@@ -24,7 +24,7 @@ struct ClaudeCloudCollector {
     }
 
     func collect(localFallback: ProviderUsage) -> Result {
-        let configs = loadAccountConfigs()
+        let configs = accountConfigs()
         guard !configs.isEmpty else {
             return Result(configured: false, accounts: [], errors: [])
         }
@@ -33,7 +33,7 @@ struct ClaudeCloudCollector {
         var accounts: [ProviderUsage] = []
         var errors: [String] = []
 
-        for config in configs {
+        for config in resolveIdentities(of: configs, using: client) {
             do {
                 let usage = try client.fetchUsage(for: config)
                 accounts.append(usage)
@@ -52,6 +52,33 @@ struct ClaudeCloudCollector {
         return Result(configured: true, accounts: accounts, errors: errors)
     }
 
+    /// Replaces each account's stored label with the identity its config dir is
+    /// *currently* logged into.
+    ///
+    /// The label in `claude-accounts.json` is a snapshot of the email taken when the
+    /// account was added, and it is bound to a config dir, not to an account. Logging
+    /// a different account into that dir — on this Mac or on another one that shares
+    /// the file — leaves the label naming one account while every number below it
+    /// belongs to another. The resolved email is cached for an hour, so this costs at
+    /// most one profile call per account per hour; when it is unavailable (offline,
+    /// expired credential) the stored label is kept as the last known name.
+    private func resolveIdentities(
+        of configs: [ClaudeAccountConfig],
+        using client: ClaudeCloudClient
+    ) -> [ClaudeAccountConfig] {
+        configs.map { config in
+            guard
+                let email = client.cachedEmail(configDir: config.configDir),
+                !email.isEmpty
+            else {
+                return config
+            }
+            var resolved = config
+            resolved.label = email
+            return resolved
+        }
+    }
+
     private func pendingUsage(for config: ClaudeAccountConfig, reason: String) -> ProviderUsage {
         var usage = ProviderUsage(kind: .claude, accountName: config.label)
         usage.claudeMergeKey = ClaudeCloudClient.statuslineName(configDir: config.configDir)
@@ -60,7 +87,9 @@ struct ClaudeCloudCollector {
         return usage
     }
 
-    private func loadAccountConfigs() -> [ClaudeAccountConfig] {
+    /// The monitored accounts as configured, with paths expanded. Also used by
+    /// `UsageCollector` to map a statusline snapshot back to its config dir.
+    func accountConfigs() -> [ClaudeAccountConfig] {
         let url = homeURL()
             .appendingPathComponent(".ai-usage", isDirectory: true)
             .appendingPathComponent("claude-accounts.json")
@@ -72,7 +101,7 @@ struct ClaudeCloudCollector {
         }
 
         return file.accounts.enumerated().map { index, entry in
-            let configDir = entry.configDir.flatMap { $0.isEmpty ? nil : $0 }
+            let configDir = ClaudeConfigPath.resolve(entry.configDir, home: homeURL())
             let label = entry.label.isEmpty ? defaultLabel(configDir: configDir, index: index) : entry.label
             return ClaudeAccountConfig(
                 label: label,
@@ -106,6 +135,7 @@ struct ClaudeAccountConfig {
 }
 
 enum ClaudeCloudError: Error {
+    case configDirMissing(String)
     case noKeychainEntry
     case noClaudeLogin
     case tokenExpiredNoRefresh
@@ -116,6 +146,9 @@ enum ClaudeCloudError: Error {
 
     var userMessage: String {
         switch self {
+        case .configDirMissing(let path):
+            let name = (path as NSString).lastPathComponent
+            return "找不到設定資料夾 \(name)(可能來自其他電腦),請重新加入此帳號"
         case .noKeychainEntry:
             return "找不到此帳號的 Keychain 憑證(請先在該 config dir 用 CLI 登入一次)"
         case .noClaudeLogin:
@@ -179,6 +212,13 @@ struct ClaudeCloudClient {
             return usage
         }
 
+        // A config dir that isn't on disk can never yield a credential here, so the
+        // cache beside it is a dead snapshot from another machine, not a reading that
+        // is merely late. Fail loudly instead of serving it as if it were data.
+        if let configDir = config.configDir, !FileManager.default.fileExists(atPath: configDir) {
+            throw ClaudeCloudError.configDirMissing(configDir)
+        }
+
         let cached = readCache(service: service)
 
         // Serve a recent reading straight from cache — quota moves slowly and the
@@ -236,42 +276,58 @@ struct ClaudeCloudClient {
         }
     }
 
-    /// Resolves an account's email from /api/oauth/profile, cached for a long time
-    /// (email rarely changes). Used to give the default account a proper label
-    /// without adding meaningful API load. Returns nil if unavailable.
+    /// Resolves which account a config dir is logged into, from /api/oauth/profile.
+    ///
+    /// The answer is cached, but the cache is keyed to the credential it was derived
+    /// from, not only to a TTL: logging a different account into the same dir keeps
+    /// the dir (and so the cache file) but replaces the Keychain item, and a plain
+    /// time-based cache would keep naming the previous account for up to an hour —
+    /// precisely the window in which the displayed name would be lying. Returns nil
+    /// when the identity cannot be established at all.
     func cachedEmail(configDir: String?) -> String? {
         let service = ClaudeKeychain.serviceName(configDir: configDir)
         let url = cacheURL(service: "email-\(service)")
+        let cached = (try? Data(contentsOf: url))
+            .flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
+
+        let token = ClaudeKeychain.read(service: service, account: ClaudeKeychain.accountName())
+            .flatMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
+            .flatMap { $0["claudeAiOauth"] as? [String: Any] }
+            .flatMap { $0["accessToken"] as? String }
+        let fingerprint = token.map(ClaudeKeychain.fingerprint(ofToken:))
 
         if
-            let data = try? Data(contentsOf: url),
-            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            let timestamp = doubleValue(object["captured_at"]),
-            now.timeIntervalSince(Date(timeIntervalSince1970: timestamp)) < 3600
+            let cached,
+            let email = cached["email"] as? String,
+            let timestamp = doubleValue(cached["captured_at"]),
+            now.timeIntervalSince(Date(timeIntervalSince1970: timestamp)) < 3600,
+            // Same credential as the one this email was resolved from.
+            let fingerprint, cached["credential"] as? String == fingerprint
         {
-            return object["email"] as? String
+            return email
         }
 
         guard
-            let blob = ClaudeKeychain.read(service: service, account: ClaudeKeychain.accountName()),
-            let root = (try? JSONSerialization.jsonObject(with: Data(blob.utf8))) as? [String: Any],
-            let oauth = root["claudeAiOauth"] as? [String: Any],
-            let token = oauth["accessToken"] as? String,
+            let token,
+            let fingerprint,
             let profile = fetchProfile(accessToken: token),
             let email = profile.email
         else {
-            // Fall back to a stale cached email if the lookup fails.
-            if
-                let data = try? Data(contentsOf: url),
-                let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            {
-                return object["email"] as? String
+            // Fall back to the last known email if the lookup fails — but not when the
+            // credential has demonstrably changed, since it would name the wrong account.
+            if let cached, fingerprint == nil || cached["credential"] as? String == fingerprint {
+                return cached["email"] as? String
             }
             return nil
         }
 
         try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-        if let data = try? JSONSerialization.data(withJSONObject: ["captured_at": now.timeIntervalSince1970, "email": email]) {
+        let payload: [String: Any] = [
+            "captured_at": now.timeIntervalSince1970,
+            "email": email,
+            "credential": fingerprint
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload) {
             try? data.write(to: url, options: .atomic)
         }
         return email

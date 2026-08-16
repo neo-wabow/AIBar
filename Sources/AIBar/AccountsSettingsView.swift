@@ -75,7 +75,7 @@ struct AccountsSettingsView: View {
                     rowDivider
                 }
                 accountRow(
-                    title: entry.label,
+                    title: displayName(for: entry),
                     subtitle: metadata(subscription: subscription(forConfigDir: entry.configDir), prefix: nil),
                     pathTooltip: entry.configDir
                 ) {
@@ -241,8 +241,25 @@ struct AccountsSettingsView: View {
         }
     }
 
+    /// Entries store `~/…` while discovery reports absolute paths, so match on expanded.
+    private func discovered(forConfigDir configDir: String?) -> DiscoveredClaudeAccount? {
+        let resolved = ClaudeConfigPath.resolve(configDir)
+        return discovered.first { $0.configDir == resolved }
+    }
+
     private func subscription(forConfigDir configDir: String?) -> String? {
-        discovered.first { $0.configDir == configDir }?.subscriptionType
+        discovered(forConfigDir: configDir)?.subscriptionType
+    }
+
+    /// The account a dir is logged into *now* wins over the label captured when the
+    /// entry was added — a re-login into the same dir silently changes who it is, and
+    /// a stale label would name one account above another account's numbers. Falls
+    /// back to the stored label while the dir can't be read (offline, gone, logged out).
+    private func displayName(for entry: ClaudeAccountEntry) -> String {
+        guard let email = discovered(forConfigDir: entry.configDir)?.email, !email.isEmpty else {
+            return entry.label
+        }
+        return email
     }
 
     private func metadata(subscription: String?, prefix: String?) -> String {

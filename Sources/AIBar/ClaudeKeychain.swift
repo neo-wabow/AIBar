@@ -25,6 +25,15 @@ enum ClaudeKeychain {
         return "\(base)-\(hash)"
     }
 
+    /// A short, non-reversible marker for a credential, used to notice that a config
+    /// dir's Keychain item has been replaced (a re-login) without storing the token.
+    static func fingerprint(ofToken token: String) -> String {
+        let hash = SHA256.hash(data: Data(token.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return String(hash.prefix(16))
+    }
+
     /// Keychain account (`-a`), mirroring the CLI: `$USER`, sanitised.
     static func accountName() -> String {
         let name = ProcessInfo.processInfo.environment["USER"] ?? NSUserName()

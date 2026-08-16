@@ -5,13 +5,16 @@ import Combine
 /// (which writes it) and the collector (which reads it on a background thread).
 struct ClaudeAccountEntry: Codable, Identifiable, Equatable {
     var label: String
-    /// `CLAUDE_CONFIG_DIR` path; nil means the default `~/.claude`.
+    /// `CLAUDE_CONFIG_DIR` path, stored home-relative (`~/.claude-x`) — see
+    /// `ClaudeConfigPath`. nil means the default `~/.claude`.
     var configDir: String?
     /// Optional escape hatches, rarely needed.
     var keychainService: String?
     var account: String?
 
-    var id: String { configDir ?? "__default__" }
+    /// Identity is the *expanded* path, so an entry written as `~/.claude-x` and one
+    /// written absolutely by an older build are recognised as the same account.
+    var id: String { ClaudeConfigPath.resolve(configDir) ?? "__default__" }
 }
 
 struct ClaudeAccountsFile: Codable {
@@ -41,7 +44,14 @@ final class ClaudeAccountsStore: ObservableObject {
             accounts = []
             return
         }
-        accounts = file.accounts
+        // Rewrite absolute paths left by older builds into the portable `~/…` form, so
+        // a file that has already been carried between machines heals itself.
+        accounts = file.accounts.map {
+            var entry = $0
+            entry.configDir = ClaudeConfigPath.store($0.configDir)
+            return entry
+        }
+        if accounts != file.accounts { save() }
     }
 
     func contains(configDir: String?) -> Bool {
@@ -51,6 +61,8 @@ final class ClaudeAccountsStore: ObservableObject {
 
     func add(_ entry: ClaudeAccountEntry) {
         guard !accounts.contains(where: { $0.id == entry.id }) else { return }
+        var entry = entry
+        entry.configDir = ClaudeConfigPath.store(entry.configDir)
         accounts.append(entry)
         save()
     }
