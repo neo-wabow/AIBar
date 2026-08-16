@@ -63,7 +63,7 @@ struct AccountsSettingsView: View {
             if let defaultAccount {
                 accountRow(
                     title: defaultAccount.suggestedLabel,
-                    subtitle: metadata(subscription: defaultAccount.subscriptionType, prefix: "預設"),
+                    subtitle: metadata(subscription: defaultAccount.subscriptionType, folder: "預設"),
                     pathTooltip: "預設 ~/.claude"
                 ) {
                     badge("自動")
@@ -76,7 +76,10 @@ struct AccountsSettingsView: View {
                 }
                 accountRow(
                     title: displayName(for: entry),
-                    subtitle: metadata(subscription: subscription(forConfigDir: entry.configDir), prefix: nil),
+                    subtitle: metadata(
+                        subscription: subscription(forConfigDir: entry.configDir),
+                        folder: folderName(entry.configDir)
+                    ),
                     pathTooltip: entry.configDir
                 ) {
                     iconButton(systemName: "xmark.circle.fill", tint: AppColors.tertiary, help: "移除") {
@@ -95,7 +98,11 @@ struct AccountsSettingsView: View {
                 if index > 0 { rowDivider }
                 accountRow(
                     title: account.suggestedLabel,
-                    subtitle: metadata(subscription: account.subscriptionType, prefix: nil),
+                    subtitle: metadata(
+                        subscription: account.subscriptionType,
+                        folder: folderName(account.configDir),
+                        hint: duplicateHint(for: account)
+                    ),
                     pathTooltip: account.configDir
                 ) {
                     iconButton(systemName: "plus.circle.fill", tint: AppColors.claudeAccent, help: "加入監看") {
@@ -262,8 +269,34 @@ struct AccountsSettingsView: View {
         return email
     }
 
-    private func metadata(subscription: String?, prefix: String?) -> String {
-        [prefix, subscription?.isEmpty == false ? subscription : nil]
+    /// Which config dir a row stands for. Rows are titled by account, but what is
+    /// actually added or removed is a dir — and two dirs can hold the same account,
+    /// which left the picker looking like it was offering an account already listed.
+    private func folderName(_ configDir: String?) -> String {
+        guard let configDir, !configDir.isEmpty else { return "預設" }
+        return ClaudeConfigPath.store(configDir) ?? configDir
+    }
+
+    /// Adding a dir whose account is already watched is legitimate, but it produces a
+    /// second card identical to the first. Say so before it surprises anyone.
+    private func duplicateHint(for account: DiscoveredClaudeAccount) -> String? {
+        guard let email = account.email, !email.isEmpty else { return nil }
+        return monitoredEmails.contains(email) ? "已在監看中" : nil
+    }
+
+    private var monitoredEmails: Set<String> {
+        var emails: Set<String> = []
+        if let email = defaultAccount?.email, !email.isEmpty {
+            emails.insert(email)
+        }
+        for entry in configuredExtras {
+            emails.insert(displayName(for: entry))
+        }
+        return emails
+    }
+
+    private func metadata(subscription: String?, folder: String?, hint: String? = nil) -> String {
+        [folder, subscription?.isEmpty == false ? subscription : nil, hint]
             .compactMap { $0 }
             .joined(separator: " · ")
             .ifEmpty("已加入")
