@@ -41,6 +41,10 @@ final class AccountsWindowController: NSObject, NSWindowDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
+    var isVisible: Bool {
+        window?.isVisible == true
+    }
+
     func windowDidBecomeKey(_ notification: Notification) {
         NotificationCenter.default.post(name: .aibarAccountsRescan, object: nil)
     }
