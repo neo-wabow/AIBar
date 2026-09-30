@@ -8,6 +8,9 @@ import SwiftUI
 struct AccountsSettingsView: View {
     @ObservedObject var store: ClaudeAccountsStore
     var onChange: () -> Void
+    /// Returns to the popover this pane was opened from. Without it the only way
+    /// out is the close button, which leaves nothing on screen to come back to.
+    var onBack: () -> Void = {}
 
     @State private var discovered: [DiscoveredClaudeAccount] = []
     @State private var isScanning = false
@@ -25,9 +28,12 @@ struct AccountsSettingsView: View {
             .ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 16) {
-                Text("Claude 帳號")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(AppColors.ink)
+                VStack(alignment: .leading, spacing: 6) {
+                    backButton
+                    Text("Claude 帳號")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(AppColors.ink)
+                }
 
                 section(header: "監看中") { monitoredCard }
 
@@ -53,6 +59,22 @@ struct AccountsSettingsView: View {
     }
 
     // MARK: - Sections
+
+    private var backButton: some View {
+        Button(action: onBack) {
+            HStack(spacing: 3) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 11, weight: .bold))
+                Text("用量")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(AppColors.claudeAccent)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("回到用量面板")
+        .keyboardShortcut(.cancelAction)
+    }
 
     private var monitoredCard: some View {
         VStack(spacing: 0) {
@@ -338,7 +360,7 @@ struct AccountsSettingsView: View {
     private func loginNewAccount() {
         let (name, path) = freshConfigDir()
         pendingLoginConfigDir = path
-        openTerminalLogin(configDirName: name)
+        ClaudeLoginLauncher.openNewAccountLogin(configDirName: name)
     }
 
     /// Picks a `.claude-accountN` dir that doesn't exist yet and isn't already used.
@@ -353,33 +375,6 @@ struct AccountsSettingsView: View {
             }
             index += 1
         }
-    }
-
-    private func openTerminalLogin(configDirName: String) {
-        // Write a .command script and open it: opening a document launches Terminal
-        // without AIBar needing the Automation ("control Terminal") permission that
-        // AppleScript would require. `claude` in a fresh config dir starts the
-        // browser OAuth login flow.
-        let script = """
-        #!/bin/bash
-        echo "———————————————————————————————————————————"
-        echo " 用你要新增的 Claude 帳號在瀏覽器登入。"
-        echo " 登入完成後,關閉這個視窗、切回 AIBar —"
-        echo " 新帳號會用它的 Email 自動加入監看。"
-        echo "———————————————————————————————————————————"
-        CLAUDE_CONFIG_DIR="$HOME/\(configDirName)" claude
-        """
-        let directory = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".ai-usage", isDirectory: true)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let file = directory.appendingPathComponent("login-\(configDirName).command")
-        do {
-            try script.write(to: file, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
-        } catch {
-            return
-        }
-        NSWorkspace.shared.open(file)
     }
 
     private func pickFolder() {

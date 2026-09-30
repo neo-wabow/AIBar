@@ -22,7 +22,7 @@ A macOS menu bar app for checking local Codex usage and multiple Claude Code acc
 
 - macOS 13 或更新版本
 - 若要從原始碼建置：Swift 5.9 相容工具鏈，或 Xcode Command Line Tools
-- Codex：Codex CLI，或會寫入本機 `$CODEX_HOME/sessions/**/*.jsonl` 的 Codex / ChatGPT desktop app
+- Codex：沿用這台 Mac 上 Codex 已儲存的 ChatGPT 登入快取，不需要在 AIBar 重新登入；只有 session 紀錄而沒有有效登入快取時，無法取得即時額度
 - Claude：要監看的帳號需先用 Claude Code CLI 登入過一次
 
 只登入 Claude Desktop 不足以提供 Claude Code 官方額度；AIBar 需要讀到 Claude Code CLI 在本機儲存的登入資訊。
@@ -58,20 +58,29 @@ scripts/build_app.sh
 dist/AIBar.app
 ```
 
+一般建置使用臨時簽章，只供本機測試。公開發佈時必須使用 Apple Developer ID Application 憑證簽章，並完成 notarization；設定 `AI_BAR_RELEASE=1` 與 `AI_BAR_CODESIGN_IDENTITY` 才能進行發佈建置。建置腳本會拒絕沒有 Developer ID 的發佈模式。臨時簽章的測試包不應作為公開下載版本。
+
+Codex 查詢的離線回歸檢查可執行 `scripts/test_codex.sh`，使用假的登入資料，不讀取真實憑證也不連線。
+
 ## 資料來源與同步
 
-- Codex CLI / ChatGPT desktop app：讀取 `$CODEX_HOME/sessions/**/*.jsonl`（預設 `~/.codex/sessions/**/*.jsonl`）裡的 `token_count` 事件與 rate-limit metadata。AIBar 會以 `100 - used_percent` 顯示剩餘額度。
+- Codex CLI / ChatGPT desktop app：優先透過本機 Codex app-server 讀取目前登入帳號的即時額度。AIBar 會搜尋 app bundle、`~/.local/bin/codex`、Homebrew 常見位置與 `PATH`。若即時查詢不可用，才讀取 `$CODEX_HOME/sessions/**/*.jsonl`（預設 `~/.codex/sessions/**/*.jsonl`）裡的 rate-limit metadata；快照超過 15 分鐘便顯示 `未同步`，避免把舊百分比當成目前額度。剩餘額度以 `100 - used_percent` 計算。
+- 找不到 Codex 執行檔或 app-server 查詢不可用時，AIBar 會沿用 `$CODEX_HOME/auth.json`（預設 `~/.codex/auth.json`）或 Codex 的 macOS Keychain 登入快取，直接向 ChatGPT 查詢額度。這不需要安裝 CLI、不會開啟登入流程，也不會產生模型回覆。登入快取的來源依照 Codex 的 `cli_auth_credentials_store` 設定選擇；明確設定的 `CODEX_HOME` 不會被其他帳號的資料夾取代。
 - Claude Code 預設帳號：可透過 Claude Code `statusLine` hook 寫出的 `~/.ai-usage/claude-status/*.json` 取得官方剩餘額度。
 - Claude Code 額外帳號：透過「帳號設定」加入後，AIBar 會用該帳號的 Claude Code 登入憑證向 Claude 官方查詢剩餘額度。憑證可能放在 macOS Keychain，也可能放在該設定資料夾裡的 `.credentials.json`（不同版本的 Claude Code 存放位置不同），AIBar 兩邊都會找，並以實際帶有 token 的那一份為準。若 AIBar 需要刷新 token，會寫回原本讀到的那個位置，以免 CLI 手上的憑證失效。
 - Claude 本機備援：若尚未取得官方額度，AIBar 仍可讀取 `~/.claude/projects/**/*.jsonl` 裡的 token usage，但不會用它推估官方剩餘百分比。
 
-AIBar 每 60 秒自動重讀一次本機資料；打開彈出視窗或按 Reload 會立即重讀一次。Reload 只會重讀本機資料，不會主動讓 Codex / Claude 產生新的額度快照。
+AIBar 每 60 秒自動更新；打開彈出視窗或按 Reload 會立即更新。Codex 即時查詢不會產生模型回覆或消耗額度；Claude 的本機備援仍需要新的回覆才會產生快照。
 
 ## 狀態文字
 
 - `待更新`：重置時間已過，但本機來源尚未產生新的 rate-limit 記錄。
 - `未同步`：尚未取得官方額度快照；AIBar 不會用本機 token usage 推估百分比。
 - `顯示上次同步值`：官方查詢或憑證刷新暫時失敗；AIBar 會保留最後一次成功同步的值並在卡片標示原因。
+
+若 Codex 顯示 `未同步`，點卡片上的狀態圖示可區分登入快取讀不到、授權暫時失效、連線失敗或官方限流。直接查詢只讀取既有憑證；憑證刷新仍交由 Codex 管理，AIBar 不會更動登入檔案。未取得即時額度且本機快照超過 15 分鐘時，會顯示最後更新時間並停止顯示舊百分比。
+
+此備援使用 Codex 官方原始碼中的[額度查詢端點](https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs)與[登入快取格式](https://github.com/openai/codex/blob/main/codex-rs/login/src/auth/storage.rs)。自訂後端、僅 API key、記憶體登入及新的加密 secrets 儲存格式仍交由本機 Codex app-server 處理。
 
 ## Claude 額度顯示說明
 

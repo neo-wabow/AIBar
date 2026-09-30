@@ -130,10 +130,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func showAccountsWindow() {
-        AccountsWindowController.shared.show(store: accountsStore) { [weak self] in
-            self?.accountsStore.load()
-            Task { await self?.store.refresh() }
-        }
+        AccountsWindowController.shared.show(
+            store: accountsStore,
+            onChange: { [weak self] in
+                self?.accountsStore.load()
+                Task { await self?.store.refresh() }
+            },
+            onBack: { [weak self] in
+                AccountsWindowController.shared.close()
+                // Let the window finish tearing down before the popover opens, so the
+                // closing window doesn't take focus — and the popover — with it.
+                DispatchQueue.main.async { self?.showPopover() }
+            }
+        )
     }
 
     private func bindStore() {
@@ -165,6 +174,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             return
         }
 
+        showPopover()
+    }
+
+    private func showPopover() {
         guard let statusView else { return }
         statusView.isHighlighted = true
         updatePopoverSize()

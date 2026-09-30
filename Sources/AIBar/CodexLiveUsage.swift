@@ -4,6 +4,7 @@ struct CodexLiveLimits {
     var primary: RateWindow?
     var secondary: RateWindow?
     var planType: String?
+    var accountEmail: String?
 }
 
 /// Reads the signed-in account's current limits from the local Codex app-server.
@@ -25,7 +26,7 @@ struct CodexLiveUsageClient {
     }
 
     func fetch(timeout: TimeInterval = 12) -> CodexLiveLimits? {
-        guard let executable = codexExecutableURL() else { return nil }
+        guard let executable = executableURL() else { return nil }
 
         let process = Process()
         let input = Pipe()
@@ -34,6 +35,7 @@ struct CodexLiveUsageClient {
         let completed = DispatchSemaphore(value: 0)
 
         process.executableURL = executable
+        process.environment = environment
         process.arguments = ["app-server", "--stdio"]
         process.standardInput = input
         process.standardOutput = output
@@ -41,7 +43,7 @@ struct CodexLiveUsageClient {
 
         output.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            guard !data.isEmpty else { return }
+            guard !data.isEmpty else { completed.signal(); return }
             if response.append(data), response.hasCompleted {
                 completed.signal()
             }
@@ -57,7 +59,8 @@ struct CodexLiveUsageClient {
         let messages = [
             #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"aibar","version":"1.0"},"capabilities":{"experimentalApi":true}}}"#,
             #"{"method":"initialized"}"#,
-            #"{"id":2,"method":"account/rateLimits/read","params":null}"#
+            #"{"id":2,"method":"account/read","params":{"refreshToken":false}}"#,
+            #"{"id":3,"method":"account/rateLimits/read","params":null}"#
         ].joined(separator: "\n") + "\n"
 
         do {
@@ -74,7 +77,9 @@ struct CodexLiveUsageClient {
         if process.isRunning { process.terminate() }
 
         guard didComplete, let result = response.result else { return nil }
-        return parse(result)
+        var limits = parse(result)
+        limits?.accountEmail = response.accountEmail
+        return limits
     }
 
     private func parse(_ result: [String: Any]) -> CodexLiveLimits? {
@@ -83,9 +88,13 @@ struct CodexLiveUsageClient {
             ?? (result["rateLimits"] as? [String: Any])
         guard let snapshot else { return nil }
 
+        let primary = rateWindow(from: snapshot["primary"] as? [String: Any])
+        let secondary = rateWindow(from: snapshot["secondary"] as? [String: Any])
+        guard primary != nil || secondary != nil else { return nil }
+
         return CodexLiveLimits(
-            primary: rateWindow(from: snapshot["primary"] as? [String: Any]),
-            secondary: rateWindow(from: snapshot["secondary"] as? [String: Any]),
+            primary: primary,
+            secondary: secondary,
             planType: snapshot["planType"] as? String
         )
     }
@@ -106,10 +115,21 @@ struct CodexLiveUsageClient {
         )
     }
 
-    private func codexExecutableURL() -> URL? {
-        var candidates = [
+    private func executableURL() -> URL? {
+        let home = fileManager.homeDirectoryForCurrentUser
+        var candidates: [String] = []
+        if let installDir = environment["CODEX_INSTALL_DIR"], !installDir.isEmpty {
+            let expandedDir = (installDir as NSString).expandingTildeInPath
+            candidates.append(URL(fileURLWithPath: expandedDir).appendingPathComponent("codex").path)
+        }
+        candidates += [
             "/Applications/ChatGPT.app/Contents/Resources/codex",
-            "/Applications/Codex.app/Contents/Resources/codex"
+            "/Applications/Codex.app/Contents/Resources/codex",
+            home.appendingPathComponent("Applications/ChatGPT.app/Contents/Resources/codex").path,
+            home.appendingPathComponent("Applications/Codex.app/Contents/Resources/codex").path,
+            home.appendingPathComponent(".local/bin/codex").path,
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex"
         ]
         if let path = environment["PATH"] {
             candidates.append(contentsOf: path.split(separator: ":").map {
@@ -136,12 +156,15 @@ private final class CodexAppServerResponse {
     private let lock = NSLock()
     private var buffer = Data()
     private(set) var result: [String: Any]?
+    private(set) var accountEmail: String?
+    private var receivedAccount = false
+    private var receivedLimits = false
     private var didSignal = false
 
     var hasCompleted: Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard result != nil, !didSignal else { return false }
+        guard receivedLimits, receivedAccount, !didSignal else { return false }
         didSignal = true
         return true
     }
@@ -154,16 +177,17 @@ private final class CodexAppServerResponse {
         while let newline = buffer.firstIndex(of: 0x0A) {
             let line = buffer[..<newline]
             buffer.removeSubrange(...newline)
-            guard
-                let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                (object["id"] as? NSNumber)?.intValue == 2,
-                let parsed = object["result"] as? [String: Any]
-            else {
-                continue
+            guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                  let id = (object["id"] as? NSNumber)?.intValue else { continue }
+            if id == 2 {
+                receivedAccount = true
+                let account = (object["result"] as? [String: Any])?["account"] as? [String: Any]
+                accountEmail = account?["email"] as? String
+            } else if id == 3 {
+                receivedLimits = true
+                result = object["result"] as? [String: Any]
             }
-            result = parsed
-            return true
         }
-        return false
+        return receivedLimits && receivedAccount
     }
 }

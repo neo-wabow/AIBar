@@ -37,7 +37,11 @@ struct ProviderCard: View {
         VStack(alignment: .leading, spacing: 9) {
             header
 
-            if usage.kind != .codex || usage.primaryLimit != nil {
+            if let relogin = usage.claudeRelogin {
+                ReloginRow(target: relogin, accent: accent)
+            }
+
+            if usage.claudeRelogin == nil && (usage.kind != .codex || usage.primaryLimit != nil) {
                 MeterRow(
                     label: limitLabel(for: usage.primaryLimit, fallback: "5 小時"),
                     remaining: primaryRemaining,
@@ -48,7 +52,7 @@ struct ProviderCard: View {
                 )
             }
 
-            if usage.kind != .codex || usage.secondaryLimit != nil {
+            if usage.claudeRelogin == nil && (usage.kind != .codex || usage.secondaryLimit != nil) {
                 MeterRow(
                     label: limitLabel(for: usage.secondaryLimit, fallback: "一週"),
                     remaining: secondaryRemaining,
@@ -56,6 +60,17 @@ struct ProviderCard: View {
                     isExpired: usage.secondaryLimit?.isExpired == true,
                     accent: accent,
                     unavailableText: unavailableText
+                )
+            }
+
+            if usage.kind == .codex && usage.primaryLimit == nil && usage.secondaryLimit == nil {
+                MeterRow(
+                    label: "一週",
+                    remaining: nil,
+                    resetAt: nil,
+                    isExpired: false,
+                    accent: accent,
+                    unavailableText: "未同步"
                 )
             }
 
@@ -157,6 +172,42 @@ struct ProviderCard: View {
         if value <= 20 { return Color(red: 0.88, green: 0.18, blue: 0.16) }
         if value <= 45 { return Color(red: 0.92, green: 0.50, blue: 0.12) }
         return accent
+    }
+}
+
+/// Stands in for the meters once a login can no longer be refreshed: its numbers
+/// would never move again, so the card asks for the one action that helps.
+private struct ReloginRow: View {
+    let target: ClaudeReloginTarget
+    let accent: Color
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color(red: 0.92, green: 0.50, blue: 0.12))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("登入已過期，請重新登入")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppColors.ink)
+                Text(ClaudeConfigPath.store(target.configDir) ?? "~/.claude")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(AppColors.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 6)
+
+            Button("重新登入") {
+                ClaudeLoginLauncher.openRelogin(target)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(accent)
+            .controlSize(.small)
+            .help("開啟終端機，在瀏覽器重新登入這個帳號")
+        }
     }
 }
 

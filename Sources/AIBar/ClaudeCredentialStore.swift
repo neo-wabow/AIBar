@@ -15,6 +15,14 @@ enum ClaudeCredentialStore {
     enum Location: Equatable {
         case keychain(service: String, account: String)
         case file(URL)
+
+        /// Where the login was read from, for status text.
+        var label: String {
+            switch self {
+            case .keychain: return "Keychain"
+            case .file(let url): return url.lastPathComponent
+            }
+        }
     }
 
     struct Credential {

@@ -16,7 +16,11 @@ final class AccountsWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
 
-    func show(store: ClaudeAccountsStore, onChange: @escaping () -> Void) {
+    func show(
+        store: ClaudeAccountsStore,
+        onChange: @escaping () -> Void,
+        onBack: @escaping () -> Void
+    ) {
         if let window {
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
@@ -24,7 +28,7 @@ final class AccountsWindowController: NSObject, NSWindowDelegate {
         }
 
         let hosting = NSHostingController(
-            rootView: AccountsSettingsView(store: store, onChange: onChange)
+            rootView: AccountsSettingsView(store: store, onChange: onChange, onBack: onBack)
         )
         let window = NSWindow(contentViewController: hosting)
         window.title = "AIBar 帳號設定"
@@ -39,6 +43,10 @@ final class AccountsWindowController: NSObject, NSWindowDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func close() {
+        window?.close()
     }
 
     var isVisible: Bool {

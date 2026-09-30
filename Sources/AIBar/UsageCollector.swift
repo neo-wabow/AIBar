@@ -9,6 +9,7 @@ private struct CodexRateLimitSnapshot {
 }
 
 struct UsageCollector {
+    private static let codexLocalSnapshotMaxAge: TimeInterval = 15 * 60
     private let fileManager: FileManager
     private let calendar: Calendar
     private let now: Date
@@ -37,17 +38,41 @@ struct UsageCollector {
 
         do {
             var codex = try collectCodex(windows: windows)
-            if let live = CodexLiveUsageClient(
+            let client = CodexLiveUsageClient(
                 fileManager: fileManager,
                 now: now,
                 environment: environment
-            ).fetch() {
+            )
+            var live = client.fetch()
+            var failureNote = "Codex 即時額度無法取得"
+            if live == nil {
+                do {
+                    let home = CodexCredentialStore.homeURL(environment: environment, userHome: homeURL())
+                    live = try CodexQuotaClient(credentials: CodexCredentialStore(home: home), now: now).fetch()
+                } catch let error as CodexQuotaError {
+                    failureNote = error.userMessage
+                } catch {
+                    failureNote = "暫時無法讀取 Codex 即時額度"
+                }
+            }
+            if let live {
                 codex.primaryLimit = live.primary
                 codex.secondaryLimit = live.secondary
                 codex.planType = live.planType ?? codex.planType
-                if codex.primaryLimit != nil || codex.secondaryLimit != nil {
-                    codex.note = nil
+                codex.accountName = live.accountEmail
+                codex.note = "使用這台 Mac 既有的 Codex 登入狀態查詢即時額度。"
+                    + (live.accountEmail.map { "帳號：\($0)" } ?? "")
+            } else if let capturedAt = codex.rateLimitCapturedAt {
+                let lastUpdated = DateFormatters.reset.string(from: capturedAt)
+                if now.timeIntervalSince(capturedAt) > Self.codexLocalSnapshotMaxAge {
+                    codex.primaryLimit = nil
+                    codex.secondaryLimit = nil
+                    codex.note = "\(failureNote)；本機快照最後更新於 \(lastUpdated)，已停止顯示舊百分比。"
+                } else {
+                    codex.note = "\(failureNote)；目前顯示 \(lastUpdated) 的本機快照。"
                 }
+            } else {
+                codex.note = failureNote
             }
             snapshot.codex = codex
         } catch {
@@ -179,6 +204,7 @@ struct UsageCollector {
             return usage
         }
 
+        usage.rateLimitCapturedAt = latestLimitSnapshot.timestamp
         usage.planType = latestLimitSnapshot.planType
         let recentOlderPlans = recentOlderCodexPlans(
             latestPlanEventAt: latestPlanEventAt,
@@ -348,7 +374,10 @@ struct UsageCollector {
         for account in cloud {
             let key = mergeKey(account.claudeMergeKey ?? account.accountName)
             if let existing = chosen[key] {
-                if account.hasOfficialLimits {
+                // An expired login wins as well: the CLI in that dir reads the same
+                // login, so its statusline can only be a frozen snapshot, and the card
+                // has to offer the re-login.
+                if account.hasOfficialLimits || account.claudeRelogin != nil {
                     // Both sources describe this account. The cloud reading is the
                     // authoritative live quota — it is polled continuously (even while
                     // idle), whereas the statusline snapshot freezes between Claude Code

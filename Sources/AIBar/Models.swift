@@ -77,6 +77,13 @@ struct ScopedLimit: Equatable {
     var window: RateWindow
 }
 
+/// A config dir whose login the token endpoint rejected, and who was signed in there.
+struct ClaudeReloginTarget: Equatable {
+    /// nil means the default `~/.claude`.
+    var configDir: String?
+    var email: String?
+}
+
 struct ProviderUsage: Identifiable, Equatable {
     var id: String {
         if let accountName, !accountName.isEmpty {
@@ -95,6 +102,7 @@ struct ProviderUsage: Identifiable, Equatable {
     var rollingFiveHours = TokenTotals()
     var dailyTotals: [Date: TokenTotals] = [:]
     var latestEventAt: Date?
+    var rateLimitCapturedAt: Date?
     var events: Int = 0
     var sourceFiles: Int = 0
     var primaryLimit: RateWindow?
@@ -109,6 +117,9 @@ struct ProviderUsage: Identifiable, Equatable {
     var statuslineCapturedAt: Date?
     var limitErrorAt: Date?
     var note: String?
+    /// Set when this Claude account's login can no longer be refreshed; the card
+    /// then offers a re-login for its config dir instead of frozen numbers.
+    var claudeRelogin: ClaudeReloginTarget?
 
     var weekTotal: TokenTotals {
         dailyTotals.values.reduce(TokenTotals()) { partial, totals in

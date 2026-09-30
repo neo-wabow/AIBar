@@ -38,7 +38,14 @@ struct ClaudeCloudCollector {
                 let usage = try client.fetchUsage(for: config)
                 accounts.append(usage)
             } catch let error as ClaudeCloudError {
-                accounts.append(pendingUsage(for: config, reason: error.userMessage))
+                var usage = pendingUsage(for: config, reason: error.userMessage)
+                if case .loginExpired = error {
+                    usage.claudeRelogin = ClaudeReloginTarget(
+                        configDir: config.configDir,
+                        email: config.label.contains("@") ? config.label : nil
+                    )
+                }
+                accounts.append(usage)
                 errors.append("\(config.label): \(error.userMessage)")
             } catch {
                 accounts.append(pendingUsage(for: config, reason: error.localizedDescription))
@@ -139,6 +146,9 @@ enum ClaudeCloudError: Error {
     case noCredential
     case noClaudeLogin
     case tokenExpiredNoRefresh
+    /// The token endpoint answered `invalid_grant`: the refresh token is expired or
+    /// revoked, and only a new login can recover it.
+    case loginExpired(String)
     case refreshFailed(String)
     case httpError(Int, String)
     case malformedResponse
@@ -155,6 +165,8 @@ enum ClaudeCloudError: Error {
             return "此 Keychain 項目沒有 Claude 帳號登入(只有 MCP 憑證)"
         case .tokenExpiredNoRefresh:
             return "access token 已過期且無法刷新"
+        case .loginExpired(let detail):
+            return "登入已過期，請重新登入。伺服器回應：\(detail)"
         case .refreshFailed(let detail):
             return "token 刷新失敗:\(detail)"
         case .httpError(let code, _):
@@ -255,15 +267,30 @@ struct ClaudeCloudClient {
         if let expiresAtMS = intValue(oauth["expiresAt"]), expiresAtMS > 0 {
             let expiresAt = Date(timeIntervalSince1970: Double(expiresAtMS) / 1000.0)
             if expiresAt.timeIntervalSince(now) <= Self.refreshSkewSeconds {
+                // A refresh token the endpoint already rejected stays rejected, so
+                // retrying it every cycle only repeats the failure. Wait until the
+                // credential changes — a re-login — before asking again.
+                if let detail = expiredLoginDetail(service: service, oauth: oauth) {
+                    throw ClaudeCloudError.loginExpired(detail)
+                }
                 do {
                     accessToken = try refreshAndPersist(
                         root: credential.root,
                         oauth: &oauth,
                         location: credential.location
                     )
+                } catch ClaudeCloudError.loginExpired(let reason) {
+                    let detail = "\(reason)（讀自 \(credential.location.label)）"
+                    markLoginExpired(service: service, oauth: credential.oauth, detail: detail)
+                    throw ClaudeCloudError.loginExpired(detail)
                 } catch {
                     if let cached {
-                        return build(cached.json, capturedAt: cached.capturedAt, note: "token 刷新失敗,顯示上次同步值")
+                        // Say why and from where: "refresh failed" alone cannot tell a
+                        // revoked login from a network blip, or a stale Keychain copy
+                        // from the file the CLI is actually using.
+                        let reason = (error as? ClaudeCloudError)?.userMessage ?? error.localizedDescription
+                        let note = "\(reason)(讀自 \(credential.location.label)),顯示上次同步值"
+                        return build(cached.json, capturedAt: cached.capturedAt, note: note)
                     }
                     throw error
                 }
@@ -273,6 +300,7 @@ struct ClaudeCloudClient {
         do {
             let usageJSON = try requestUsage(accessToken: accessToken)
             writeCache(service: service, json: usageJSON)
+            clearLoginExpired(service: service)
             return build(usageJSON, capturedAt: now, note: nil)
         } catch let error as ClaudeCloudError {
             if case .httpError(429, _) = error {
@@ -299,8 +327,12 @@ struct ClaudeCloudClient {
         let cached = (try? Data(contentsOf: url))
             .flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }
 
-        let token = ClaudeCredentialStore.read(configDir: configDir)?.accessToken
+        let credential = ClaudeCredentialStore.read(configDir: configDir)
+        let token = credential?.accessToken
         let fingerprint = token.map(ClaudeKeychain.fingerprint(ofToken:))
+        // An expired login's access token is dead as well; asking the profile
+        // endpoint with it would fail every cycle until the user signs in again.
+        let loginExpired = credential.flatMap { expiredLoginDetail(service: service, oauth: $0.oauth) } != nil
 
         if
             let cached,
@@ -314,6 +346,7 @@ struct ClaudeCloudClient {
         }
 
         guard
+            !loginExpired,
             let token,
             let fingerprint,
             let profile = fetchProfile(accessToken: token),
@@ -393,6 +426,45 @@ struct ClaudeCloudClient {
         object["backoff_until"] = now.timeIntervalSince1970 + Self.backoffInterval
         guard let out = try? JSONSerialization.data(withJSONObject: object) else { return }
         try? out.write(to: cacheURL(service: service), options: .atomic)
+    }
+
+    // MARK: - Expired-login marker
+
+    /// Remembers which refresh token the endpoint rejected, by fingerprint only, so
+    /// the same dead token is not retried while a new login is picked up at once.
+    /// Kept apart from the usage cache because an account can expire before it ever
+    /// had a successful reading.
+    private func loginExpiredURL(service: String) -> URL {
+        cacheURL(service: "login-expired-\(service)")
+    }
+
+    /// The recorded failure when `oauth` still carries the rejected refresh token.
+    private func expiredLoginDetail(service: String, oauth: [String: Any]) -> String? {
+        guard
+            let refreshToken = oauth["refreshToken"] as? String, !refreshToken.isEmpty,
+            let data = try? Data(contentsOf: loginExpiredURL(service: service)),
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            object["credential"] as? String == ClaudeKeychain.fingerprint(ofToken: refreshToken)
+        else {
+            return nil
+        }
+        return object["detail"] as? String ?? ""
+    }
+
+    private func markLoginExpired(service: String, oauth: [String: Any], detail: String) {
+        guard let refreshToken = oauth["refreshToken"] as? String, !refreshToken.isEmpty else { return }
+        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+        let payload: [String: Any] = [
+            "marked_at": now.timeIntervalSince1970,
+            "credential": ClaudeKeychain.fingerprint(ofToken: refreshToken),
+            "detail": detail
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        try? data.write(to: loginExpiredURL(service: service), options: .atomic)
+    }
+
+    private func clearLoginExpired(service: String) {
+        try? FileManager.default.removeItem(at: loginExpiredURL(service: service))
     }
 
     /// The account name the statusline hook would derive for a config dir, used to
@@ -486,7 +558,11 @@ struct ClaudeCloudClient {
         if let error { throw ClaudeCloudError.refreshFailed(error.localizedDescription) }
         guard let response, let data else { throw ClaudeCloudError.refreshFailed("無回應") }
         guard response.statusCode == 200 else {
-            throw ClaudeCloudError.refreshFailed("HTTP \(response.statusCode) \(snippet(data))")
+            let summary = Self.oauthErrorSummary(data)
+            if Self.oauthErrorCode(data) == "invalid_grant" {
+                throw ClaudeCloudError.loginExpired(summary)
+            }
+            throw ClaudeCloudError.refreshFailed("HTTP \(response.statusCode) \(summary)")
         }
         guard
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -508,6 +584,15 @@ struct ClaudeCloudClient {
         }
         if let expiresIn = doubleValue(object["expires_in"]) {
             mergedOauth["expiresAt"] = Int((now.timeIntervalSince1970 + expiresIn) * 1000)
+        }
+        // Mirror the CLI: take a new refresh-token lifetime and scope list only when
+        // the response carries them, and otherwise keep what is stored. Dropping
+        // them left the CLI's "login expires in N days" warning reading a stale date.
+        if let refreshExpiresIn = doubleValue(object["refresh_token_expires_in"]) {
+            mergedOauth["refreshTokenExpiresAt"] = Int((now.timeIntervalSince1970 + refreshExpiresIn) * 1000)
+        }
+        if let scope = object["scope"] as? String {
+            mergedOauth["scopes"] = scope.split(separator: " ").map(String.init)
         }
         mergedRoot["claudeAiOauth"] = mergedOauth
         oauth = mergedOauth
@@ -541,6 +626,30 @@ struct ClaudeCloudClient {
             return (nil, nil, URLError(.timedOut))
         }
         return (outData, outResponse, outError)
+    }
+
+    /// The OAuth `error` code of a token-endpoint error body, e.g. `invalid_grant`.
+    static func oauthErrorCode(_ data: Data) -> String? {
+        ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["error"] as? String
+    }
+
+    /// The telling part of a token-endpoint error body — e.g. `invalid_grant: …` —
+    /// short enough for the status popover, instead of raw JSON.
+    static func oauthErrorSummary(_ data: Data) -> String {
+        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        var summary: String
+        if let code = object?["error"] as? String {
+            // OAuth shape: {"error": "invalid_grant", "error_description": "..."}
+            summary = code
+            if let description = object?["error_description"] as? String { summary += ": \(description)" }
+        } else if let error = object?["error"] as? [String: Any], let type = error["type"] as? String {
+            // API shape: {"error": {"type": "...", "message": "..."}}
+            summary = type
+            if let message = error["message"] as? String { summary += ": \(message)" }
+        } else {
+            summary = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return String(summary.prefix(120))
     }
 
     private func snippet(_ data: Data) -> String {
